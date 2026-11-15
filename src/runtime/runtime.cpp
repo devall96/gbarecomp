@@ -4847,8 +4847,15 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 // Banked frames for the pacer: this present covers every guest
                 // frame since the last one (normally 1; 2 after a stale-frame
                 // skip). The pacer throttles all of them.
-                const uint64_t banked_frames = frame - last_presented_frame;
-                last_presented_frame = frame;
+                // A state load or rewind during this boundary's host pump
+                // moved the frame counter (and re-based last_presented_frame):
+                // pace this present as one frame. Using the pre-jump `frame`
+                // gave a huge count, clamped to 16 frames: a 268 ms freeze on
+                // every load, rewind step and the frame after.
+                const uint64_t frame_now = ppu.frame_count();
+                const uint64_t banked_frames = frame_now != frame
+                    ? 1u : frame - last_presented_frame;
+                last_presented_frame = frame_now;
                 if (present_frame) {
                     ++frames_presented;
                     if (args.frames >= 0 && frames_presented >= args.frames)
@@ -5287,8 +5294,15 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                     host_quit = true;
                 if (phase_active) fp_t4 = FramePhaseRing::now_ns();
                 dispatches_since_pump = 0;
-                const uint64_t banked_frames = frame - last_presented_frame;
-                last_presented_frame = frame;
+                // A state load or rewind during this boundary's host pump
+                // moved the frame counter (and re-based last_presented_frame):
+                // pace this present as one frame. Using the pre-jump `frame`
+                // gave a huge count, clamped to 16 frames: a 268 ms freeze on
+                // every load, rewind step and the frame after.
+                const uint64_t frame_now = ppu.frame_count();
+                const uint64_t banked_frames = frame_now != frame
+                    ? 1u : frame - last_presented_frame;
+                last_presented_frame = frame_now;
                 if (present_frame) {
                     ++frames_presented;
                     if (args.frames >= 0 && frames_presented >= args.frames) {
