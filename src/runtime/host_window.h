@@ -126,6 +126,9 @@ public:
     // slow response of the original panel. Presentation only.
     void set_lcd_ghosting(bool enabled);
     bool lcd_ghosting() const;
+    // Pause the game while the window does not have focus (default on).
+    void set_pause_unfocused(bool enabled);
+    bool pause_unfocused() const;
     // The player's enhanced-audio (MP2K shadow) choice, remembered in
     // config.ini [Audio] next to [Touch]. saved_audio_enhanced() returns
     // false until the player has chosen.
@@ -259,6 +262,9 @@ public:
         // title-bar readout.
         bool     toggle_fullscreen = false;
         bool     toggle_pause = false;
+        // The window lost / regained keyboard focus this poll.
+        bool     focus_lost = false;
+        bool     focus_gained = false;
         bool     window_bigger = false;
         bool     window_smaller = false;
         bool     volume_up = false;

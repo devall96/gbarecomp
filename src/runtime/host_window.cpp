@@ -509,6 +509,7 @@ struct Backend {
     bool lcd_grid = false;
     int lcd_grid_strength = 40;
     bool lcd_ghosting = false;
+    bool pause_unfocused = true;
     std::vector<uint8_t> ghost_prev;  // previous presented RGB888 frame
     std::vector<uint8_t> ghost_mix;   // blended copy that is uploaded
 
@@ -3081,6 +3082,7 @@ void HostWindow::load_input_config(const char* dir,
         else if (SDL_strcasecmp(key, "lcd_grid_strength") == 0)
             b->lcd_grid_strength = std::clamp(std::atoi(val), 0, 100);
         else if (SDL_strcasecmp(key, "lcd_ghosting") == 0) b->lcd_ghosting = std::atoi(val) != 0;
+        else if (SDL_strcasecmp(key, "pause_unfocused") == 0) b->pause_unfocused = std::atoi(val) != 0;
     });
     const std::string keybinds_path=(std::filesystem::path(dir)/(keybinds_filename&&keybinds_filename[0]?keybinds_filename:"keybinds.ini")).string();
 #if defined(GBARECOMP_GBA_PAD_BINDS)
@@ -3343,6 +3345,17 @@ void HostWindow::set_lcd_ghosting(bool enabled) {
     b->lcd_ghosting = enabled;
     b->ghost_prev.clear();
     save_launcher_keys(b->launcher_config_path, {{"lcd_ghosting", enabled ? "1" : "0"}});
+}
+
+void HostWindow::set_pause_unfocused(bool enabled) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->pause_unfocused = enabled;
+    save_launcher_keys(b->launcher_config_path, {{"pause_unfocused", enabled ? "1" : "0"}});
+}
+
+bool HostWindow::pause_unfocused() const {
+    return !open_ || !impl_ || static_cast<const Backend*>(impl_)->pause_unfocused;
 }
 
 bool HostWindow::lcd_ghosting() const {
@@ -3672,6 +3685,12 @@ HostWindow::Events HostWindow::pump() {
         } else if (e.type == SDL_WINDOWEVENT &&
                    e.window.event == SDL_WINDOWEVENT_CLOSE) {
             ev.quit = true;
+        } else if (e.type == SDL_WINDOWEVENT &&
+                   e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            ev.focus_lost = true;
+        } else if (e.type == SDL_WINDOWEVENT &&
+                   e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+            ev.focus_gained = true;
         } else if (e.type == SDL_FINGERDOWN ||
                    e.type == SDL_FINGERMOTION ||
                    e.type == SDL_FINGERUP) {

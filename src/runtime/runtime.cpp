@@ -270,6 +270,7 @@ struct Args {
 #define GBARECOMP_UI_KEY_LCD_GRID "graphics.lcd_grid"
 #define GBARECOMP_UI_KEY_LCD_GRID_STRENGTH "graphics.lcd_grid_strength"
 #define GBARECOMP_UI_KEY_LCD_GHOSTING "graphics.lcd_ghosting"
+#define GBARECOMP_UI_KEY_PAUSE_UNFOCUSED "system.pause_unfocused"
 
 struct RuntimeUiContext {
     HostWindow* window = nullptr;
@@ -313,6 +314,7 @@ int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID) == 0) *out = c->window->lcd_grid();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID_STRENGTH) == 0) *out = c->window->lcd_grid_strength();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0) *out = c->window->lcd_ghosting();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0) *out = c->window->pause_unfocused();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) *out = c->window->audio_enabled();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) *out = c->window->volume();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0) *out = c->state_slot;
@@ -365,6 +367,8 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
         c->window->set_lcd_grid(c->window->lcd_grid(), value);
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0)
         c->window->set_lcd_ghosting(value != 0);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0)
+        c->window->set_pause_unfocused(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0)
         c->window->set_audio_enabled(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0)
@@ -2384,6 +2388,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // the run loop stops stepping the guest but keeps pumping input and
     // re-presenting the last frame.
     bool host_paused = false;
+    bool focus_paused = false;   // host_paused set by the focus-loss rule
     // Windowed debugger control uses the normal host pause loop, keeping SDL
     // events, rendering and queued snapshots responsive while the guest stops.
     std::atomic<bool> observer_pause_requested{false};
@@ -3597,6 +3602,13 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         ghost_item.description = "Blend each frame with the last, like the original screen's slow response. Softens flicker effects.";
         ghost_item.type = RECOMP_RUNTIME_UI_BOOL;
         runtime_ui_extras.push_back(ghost_item);
+        RecompRuntimeUiItem unfocused_item{};
+        unfocused_item.key = GBARECOMP_UI_KEY_PAUSE_UNFOCUSED;
+        unfocused_item.section = "System";
+        unfocused_item.label = "Pause when unfocused";
+        unfocused_item.description = "Pause the game while you are in another window, and carry on when you come back.";
+        unfocused_item.type = RECOMP_RUNTIME_UI_BOOL;
+        runtime_ui_extras.push_back(unfocused_item);
 #if !defined(__ANDROID__)
         runtime_ui_config.features |=
             RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
@@ -4223,9 +4235,26 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         if (ev.toggle_fps)  win.set_fps_readout(!win.fps_readout());
         if (ev.toggle_pause) {
             host_paused = !host_paused;
+            focus_paused = false;   // a manual choice wins over the focus rule
             // Realign the pacer on unpause so it doesn't burn the
             // accumulated wall-clock lag catching up.
             if (!host_paused && pacer) pacer->reset();
+        }
+        // Pause while unfocused (player option, default on). Only a pause the
+        // focus rule started is undone when focus returns.
+        // Scripted runs (--frames, input replay) never pause: a perf suite
+        // must not stall because someone clicked another window.
+        if (ev.focus_lost && !host_paused && win.pause_unfocused() &&
+            args.frames < 0 && !std::getenv("GBARECOMP_INPUT_REPLAY")) {
+            host_paused = true;
+            focus_paused = true;
+            std::fprintf(stderr, "[host] paused: window lost focus\n");
+        }
+        if (ev.focus_gained && focus_paused) {
+            host_paused = false;
+            focus_paused = false;
+            std::fprintf(stderr, "[host] resumed: window focused\n");
+            if (pacer) pacer->reset();
         }
 #if defined(GBARECOMP_RUNTIME_UI)
         // Fold a menu request into the hotkey path so save/load has exactly
