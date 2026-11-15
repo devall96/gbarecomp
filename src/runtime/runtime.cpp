@@ -2472,6 +2472,18 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                     iw);
             }
         }
+        if (const char* ew = std::getenv("GBARECOMP_EWRAM_DUMP")) {
+            std::ofstream dump(ew, std::ios::binary | std::ios::trunc);
+            dump.write(reinterpret_cast<const char*>(bus.ewram_ptr()),
+                       256 * 1024);
+            if (dump) {
+                std::printf("ewram_dump_saved path=\"%s\" bytes=262144\n", ew);
+            } else {
+                std::fprintf(stderr,
+                    "[gbarecomp:runtime] could not write EWRAM dump \"%s\"\n",
+                    ew);
+            }
+        }
     };
 
     auto step_once = [&]() -> bool {
@@ -2814,7 +2826,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             info.gesture_count = batch.gestures.size();
             info.points = batch.points.data();
             info.point_count = batch.points.size();
-            synth = static_cast<std::uint16_t>(opts.input_frame(&info) & 0x03FFu);
+            info.ewram = bus.ewram_ptr();
+            info.iwram = bus.iwram_ptr();
+            synth =static_cast<std::uint16_t>(opts.input_frame(&info) & 0x03FFu);
         }
         bus.io().set_synthesized_keyinput(synth);
         KeySynthSample sample;

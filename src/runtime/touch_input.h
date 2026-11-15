@@ -173,6 +173,11 @@ struct TouchFrameInfo {
     std::size_t gesture_count = 0;
     const TouchPointSnapshot* points = nullptr;
     std::size_t point_count = 0;
+    // Read-only views of work RAM (EWRAM 256 KiB, IWRAM 32 KiB) for policies
+    // that steer by game state, e.g. answering a menu the player has already
+    // chosen for. Never write through these.
+    const std::uint8_t* ewram = nullptr;
+    const std::uint8_t* iwram = nullptr;
 };
 
 // Presentation facts the hub needs to map between drawable and view space.
