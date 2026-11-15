@@ -3591,6 +3591,18 @@ bool HostWindow::wait_for_foreground() {
 void HostWindow::haptic_pulse(int duration_ms, float strength) {
     if (!open_ || !impl_ || duration_ms <= 0) return;
     auto* b = static_cast<Backend*>(impl_);
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+    // The player's game controller first: SDL's generic haptic device 0 is
+    // often not the pad in their hands (or not a pad at all).
+    if (b->controller) {
+        const float s = std::clamp(strength, 0.0f, 1.0f);
+        const auto low = static_cast<Uint16>(s * 65535.0f);
+        const auto high = static_cast<Uint16>(s * 0.6f * 65535.0f);
+        if (SDL_GameControllerRumble(b->controller, low, high,
+                                     static_cast<Uint32>(duration_ms)) == 0)
+            return;
+    }
+#endif
     if (!b->haptic_tried) {
         b->haptic_tried = true;
         if (SDL_WasInit(SDL_INIT_HAPTIC) == 0) SDL_InitSubSystem(SDL_INIT_HAPTIC);
