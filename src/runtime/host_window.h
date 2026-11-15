@@ -306,6 +306,10 @@ private:
 // Installed by the open HostWindow; a no-op when no window/vibrator exists.
 void host_haptic_pulse(int duration_ms, float strength);
 
+// Output rate the next HostWindow::open() opens the audio device at
+// (default 48000 Hz). The game audio is resampled to it.
+void host_set_audio_rate(int hz);
+
 // Ask the open window to show the runtime settings menu at its next pump
 // (thread-safe). Lets a policy that claims Back/long-press still offer the
 // menu from a context of its choosing, e.g. Back on the free overworld.

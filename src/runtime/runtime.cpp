@@ -195,6 +195,7 @@ struct Args {
     // --fullscreen=<0|1|2> selects explicitly.
     int fullscreen = 0;
     int  volume = 100;            // --volume 0..100: pushed-sample gain
+    int  audio_freq = 48000;      // --audio-freq: host output rate (Hz)
     bool linear_filter = false;   // --linear-filter 1: linear texture scaling
     bool integer_scale = false;
     bool scanlines = false;
@@ -892,7 +893,7 @@ constexpr std::string_view kCliValueFlags[] = {
     "--save",        "--save-path",     "--gyro-sensitivity",
     "--sharp-filter", "--linear-filter", "--affine-filter", "--internal-resolution", "--screen",
     "--integer-scale", "--scanlines", "--scanline-strength",
-    "--volume",      "--replay-diagnostic", "--state-dir",
+    "--volume",      "--replay-diagnostic", "--state-dir",  "--audio-freq",
 };
 
 bool cli_flag_takes_value(std::string_view flag) {
@@ -1156,6 +1157,15 @@ bool parse_cli(int argc, char** argv, Args* args, std::string* err) {
             if (v < 0) v = 0;
             if (v > 2) v = 2;
             args->fullscreen = v;
+            continue;
+        }
+        if (s == "--audio-freq") {
+            const char* v = need_value("--audio-freq");
+            if (!v) return false;
+            if (!parse_int(v, &args->audio_freq) || args->audio_freq < 8000 || args->audio_freq > 192000) {
+                if (err) *err = "invalid --audio-freq value (expected 8000..192000)";
+                return false;
+            }
             continue;
         }
         if (s == "--volume") {
@@ -3400,6 +3410,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
 #endif
         );
 #endif
+        host_set_audio_rate(args.audio_freq);
         if (!win.open(args.scale, ppu.render_width(), ppu.render_height(),
                       runtime_title,
                       args.screen.empty() ? nullptr : args.screen.c_str(),

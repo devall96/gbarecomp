@@ -315,6 +315,7 @@ struct SeamConfig {
     int  affine_filter = -1;
     int  screen_kind = 0;      // kScreenTokens index
     int  volume = 100;
+    int  audio_freq = 48000;  // Sound > Sample rate
     int player_source = 1;
     std::string player_guid;
     int  skip_launcher = 0;
@@ -388,6 +389,7 @@ inline void seam_config_load(const std::string& path, SeamConfig* c) {
         else if (key == "affine_filter") c->affine_filter = std::atoi(val.c_str());
         else if (key == "screen")        c->screen_kind = screen_token_to_index(val);
         else if (key == "volume")        c->volume = std::atoi(val.c_str());
+        else if (key == "audio_freq")    c->audio_freq = std::atoi(val.c_str());
         else if (key == "player_source") c->player_source=std::clamp(std::atoi(val.c_str()),0,2);
         else if (key == "player_guid") c->player_guid=val;
         else if (key == "skip_launcher") c->skip_launcher = std::atoi(val.c_str());
@@ -411,6 +413,7 @@ inline void seam_config_load(const std::string& path, SeamConfig* c) {
     if (c->scale > 8) c->scale = 8;
     if (c->volume < 0) c->volume = 0;
     if (c->volume > 100) c->volume = 100;
+    if (c->audio_freq < 8000 || c->audio_freq > 96000) c->audio_freq = 48000;
     if (c->screen_kind < 0 || c->screen_kind > 4) c->screen_kind = 0;
     // Tri-state: 0 off, 1 borderless, 2 exclusive. Guard against a hand-
     // edited/garbage config.ini value; do NOT collapse to a bool here.
@@ -464,6 +467,7 @@ inline void seam_config_save(const std::string& path, const SeamConfig& c) {
     f << "affine_filter = " << c.affine_filter << "\n";
     f << "screen = " << kScreenTokens[c.screen_kind] << "\n";
     f << "volume = " << c.volume << "\n";
+    f << "audio_freq = " << c.audio_freq << "\n";
     f << "player_source = " << c.player_source << "\n";
     f << "player_guid = " << c.player_guid << "\n";
     f << "skip_launcher = " << c.skip_launcher << "\n";
@@ -586,40 +590,46 @@ inline void seam_solar_save(const std::string& path, const SeamSolar& s) {
 inline void seam_append_setting_args(std::vector<std::string>& args,
                                      const SeamConfig& c,
                                      const gbarecomp::RunOptions& opts) {
-    args.push_back("--scale");
-    args.push_back(std::to_string(c.scale));
-    args.push_back("--volume");
-    args.push_back(std::to_string(c.volume));
-    args.push_back("--linear-filter");
-    args.push_back(c.linear_filter ? "1" : "0");
-    args.insert(args.end(), {"--integer-scale", c.integer_scale ? "1" : "0",
+    // Saved launcher settings, as ordinary run_game() CLI args. A flag the
+    // command line already gives wins (scripted runs pass --volume 0, and
+    // the profile must not override that).
+    std::vector<std::string> out;
+    out.push_back("--scale");
+    out.push_back(std::to_string(c.scale));
+    out.push_back("--volume");
+    out.push_back(std::to_string(c.volume));
+    out.push_back("--audio-freq");
+    out.push_back(std::to_string(c.audio_freq));
+    out.push_back("--linear-filter");
+    out.push_back(c.linear_filter ? "1" : "0");
+    out.insert(out.end(), {"--integer-scale", c.integer_scale ? "1" : "0",
                             "--scanlines", c.scanlines ? "1" : "0",
                             "--scanline-strength", std::to_string(c.scanline_strength)});
     if (opts.launcher_expose_sharp_filter) {
-        args.push_back("--sharp-filter");
-        args.push_back(c.sharp_filter ? "1" : "0");
+        out.push_back("--sharp-filter");
+        out.push_back(c.sharp_filter ? "1" : "0");
     }
     if (opts.launcher_expose_affine_filter) {
-        args.push_back("--affine-filter");
-        args.push_back(c.affine_filter ? "1" : "0");
+        out.push_back("--affine-filter");
+        out.push_back(c.affine_filter ? "1" : "0");
     }
-    args.push_back("--screen");
-    args.push_back(kScreenTokens[c.screen_kind]);
+    out.push_back("--screen");
+    out.push_back(kScreenTokens[c.screen_kind]);
     // Tri-state: 0 off, 1 borderless, 2 exclusive. Pass the value explicitly
     // so run_game() gets the exact mode; bare `--fullscreen` (no `=N`) still
     // parses as mode 1 for back-compat with older seam/CLI invocations.
     if (c.fullscreen) {
-        args.push_back("--fullscreen=" + std::to_string(c.fullscreen));
+        out.push_back("--fullscreen=" + std::to_string(c.fullscreen));
     }
     if (opts.launcher_expose_gyro) {
-        args.push_back("--gyro-sensitivity");
-        args.push_back(std::to_string(c.gyro_sensitivity));
+        out.push_back("--gyro-sensitivity");
+        out.push_back(std::to_string(c.gyro_sensitivity));
     }
     const bool adaptive_view =
         c.adaptive_view && opts.launcher_expose_adaptive_view &&
         opts.resize_driven_view && opts.max_resize_view_width > 240;
     if (adaptive_view) {
-        args.push_back("--resize-view");
+        out.push_back("--resize-view");
     }
 
     // Windowed adaptive sessions use the selected fixed aspect as their
@@ -634,9 +644,9 @@ inline void seam_append_setting_args(std::vector<std::string>& args,
         if (idx < 0 || idx >= opts.launcher_num_aspects) idx = 0;
         const std::uint16_t w = opts.launcher_aspect_view_widths[idx];
         if (w >= 240) {
-            args.push_back("--view-width");
-            args.push_back(std::to_string(w));
-            if (!adaptive_view) args.push_back("--no-resize-view");
+            out.push_back("--view-width");
+            out.push_back(std::to_string(w));
+            if (!adaptive_view) out.push_back("--no-resize-view");
         }
     } else if (fixed_view_honored && c.widescreen && !adaptive_view &&
                opts.resize_driven_view &&
@@ -644,11 +654,26 @@ inline void seam_append_setting_args(std::vector<std::string>& args,
         // Resize-driven games start faithful and reveal more world as the
         // drawable becomes wider. This is deliberately distinct from the
         // fixed --view-width contract used by Mega Man Zero and others.
-        args.push_back("--resize-view");
+        out.push_back("--resize-view");
     } else if (fixed_view_honored && c.widescreen &&
                opts.widescreen_view_width > 240) {
-        args.push_back("--view-width");
-        args.push_back(std::to_string(opts.widescreen_view_width));
+        out.push_back("--view-width");
+        out.push_back(std::to_string(opts.widescreen_view_width));
+    }
+    std::vector<std::string> given;
+    for (const auto& a : args)
+        if (a.rfind("--", 0) == 0) given.push_back(a.substr(0, a.find('=')));
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const std::string& a = out[i];
+        const std::string name = a.substr(0, a.find('='));
+        const bool has_value = a.find('=') == std::string::npos && i + 1 < out.size() &&
+                               out[i + 1].rfind("--", 0) != 0;
+        if (std::find(given.begin(), given.end(), name) != given.end()) {
+            if (has_value) ++i;
+            continue;
+        }
+        args.push_back(a);
+        if (has_value) args.push_back(out[++i]);
     }
 }
 
@@ -878,7 +903,7 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
         opts.netplay->view_policy);
 #endif
     ls.enable_audio  = 1;
-    ls.audio_freq    = 32768;             // GBA mixer base rate (display only)
+    ls.audio_freq    = cfg.audio_freq;    // host output rate (Sound > Sample rate)
     ls.volume        = cfg.volume;
     ls.player_src[0] = cfg.player_source;
 #if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_GUID)
@@ -1087,6 +1112,8 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     cfg.screen_kind   = (ls.screen_kind >= 0 && ls.screen_kind <= 4)
                           ? ls.screen_kind : 0;
     cfg.volume        = ls.volume;
+    cfg.audio_freq    = (ls.audio_freq >= 8000 && ls.audio_freq <= 96000)
+                          ? ls.audio_freq : 48000;
     cfg.player_source=std::clamp(ls.player_src[0],0,2);
 #if defined(RECOMP_LAUNCHER_HAS_PLAYER_GAMEPAD_GUID)
     cfg.player_guid=ls.player_gamepad_guid[0];

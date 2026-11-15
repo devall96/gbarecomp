@@ -347,6 +347,7 @@ void log_display_mode(SDL_Window* win, const char* tag) {
 
 // The open window that owns the platform vibrator (one per process).
 HostWindow* g_haptic_window = nullptr;
+int g_audio_rate_hz = 48000;
 // Settings-menu requests from game policies (any thread; consumed by pump).
 std::atomic<bool> g_settings_menu_requested{false};
 
@@ -2209,10 +2210,13 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     // The host device receives stereo S16. Both playback modes convert from
     // the block's SOUNDBIAS rate; the initial device rate is only a preference.
     SDL_AudioSpec want{};
-    want.freq     = 65536;
+    // Open at the player's rate (launcher Sample rate, default 48 kHz) and
+    // let SDL convert if the device runs at another rate, so the output
+    // rate is what the launcher says.
+    want.freq     = g_audio_rate_hz;
     want.format   = AUDIO_S16SYS;
     want.channels = 2;
-    want.samples  = 1024;  // ~15 ms callback quantum at 65 kHz
+    want.samples  = 1024;  // ~21 ms callback quantum at 48 kHz
     const char* direct_audio_env = std::getenv("GBARECOMP_AUDIO_DIRECT");
     b->audio_direct =
         direct_audio_env && *direct_audio_env && *direct_audio_env != '0';
@@ -2223,8 +2227,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     const char* audio_device_name =
         audio_device_env && *audio_device_env ? audio_device_env : nullptr;
     b->audio_dev = SDL_OpenAudioDevice(audio_device_name, /*iscapture=*/0,
-                                       &want, &got,
-                                       SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+                                       &want, &got, 0);
     if (b->audio_dev && (got.channels != 2 || got.format != AUDIO_S16SYS || got.freq <= 0)) {
         SDL_CloseAudioDevice(b->audio_dev);
         b->audio_dev = 0;
@@ -2262,6 +2265,8 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
             cfg.preroll_ms  = 250.0;                    // boot pre-roll: hide the cold-start
                                                         // recomp warm-up hitch (drains to target)
             if (rab_init(&b->bridge, &cfg) == 0) b->bridge_ready = true;
+            std::fprintf(stderr, "host_window: audio=callback rate=%dHz (asked %dHz) quantum=%u\n",
+                         got.freq, want.freq, static_cast<unsigned>(got.samples));
             SDL_PauseAudioDevice(b->audio_dev, 0);      // start the callback
         }
     }
@@ -3626,6 +3631,10 @@ void host_haptic_pulse(int duration_ms, float strength) {
     if (g_haptic_window) g_haptic_window->haptic_pulse(duration_ms, strength);
 }
 
+void host_set_audio_rate(int hz) {
+    if (hz >= 8000 && hz <= 192000) g_audio_rate_hz = hz;
+}
+
 void host_request_settings_menu() {
     g_settings_menu_requested.store(true);
 }
@@ -4143,6 +4152,7 @@ void HostWindow::set_presentation_anchor_top(bool) {}
 bool HostWindow::wait_for_foreground() { return false; }
 void HostWindow::haptic_pulse(int, float) {}
 void host_haptic_pulse(int, float) {}
+void host_set_audio_rate(int) {}
 void host_request_settings_menu() {}
 void HostWindow::set_fps_readout(bool /*on*/) {}
 bool HostWindow::fps_readout() const { return false; }
