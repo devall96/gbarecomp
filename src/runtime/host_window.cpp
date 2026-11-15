@@ -1773,9 +1773,71 @@ void runtime_ui_toggle(RecompRuntimeUi* ui) {
     else recomp_runtime_ui_open(ui);
 }
 
+#if defined(RECOMP_RUNTIME_UI_HAS_INPUT_FAMILY)
+// The prompt style for a controller: Xbox (and generic pads), PlayStation or
+// Nintendo, from SDL's controller type. GBARECOMP_UI_FAMILY=keyboard|xbox|
+// playstation|nintendo pins it (screenshots and tests).
+RecompRuntimeUiInputFamily pad_input_family(SDL_GameController* pad) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    if (pad) {
+        switch (SDL_GameControllerGetType(pad)) {
+        case SDL_CONTROLLER_TYPE_PS3:
+        case SDL_CONTROLLER_TYPE_PS4:
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+        case SDL_CONTROLLER_TYPE_PS5:
+#endif
+            return RECOMP_RUNTIME_UI_FAMILY_PLAYSTATION;
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+#endif
+            return RECOMP_RUNTIME_UI_FAMILY_NINTENDO;
+        default:
+            break;
+        }
+    }
+#else
+    (void)pad;
+#endif
+    return RECOMP_RUNTIME_UI_FAMILY_XBOX;
+}
+
+void note_input_family(RecompRuntimeUi* ui, const SDL_Event& e) {
+    static const int pinned = [] {
+        const char* v = std::getenv("GBARECOMP_UI_FAMILY");
+        if (!v || !v[0]) return -1;
+        if (SDL_strncasecmp(v, "key", 3) == 0) return (int)RECOMP_RUNTIME_UI_FAMILY_KEYBOARD;
+        if (SDL_strncasecmp(v, "ps", 2) == 0 || SDL_strncasecmp(v, "play", 4) == 0)
+            return (int)RECOMP_RUNTIME_UI_FAMILY_PLAYSTATION;
+        if (SDL_strncasecmp(v, "nin", 3) == 0 || SDL_strncasecmp(v, "switch", 6) == 0)
+            return (int)RECOMP_RUNTIME_UI_FAMILY_NINTENDO;
+        return (int)RECOMP_RUNTIME_UI_FAMILY_XBOX;
+    }();
+    if (pinned >= 0) {
+        recomp_runtime_ui_set_input_family(ui, (RecompRuntimeUiInputFamily)pinned);
+        return;
+    }
+    if (e.type == SDL_KEYDOWN) {
+        recomp_runtime_ui_set_input_family(ui, RECOMP_RUNTIME_UI_FAMILY_KEYBOARD);
+    } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+        recomp_runtime_ui_set_input_family(
+            ui, pad_input_family(SDL_GameControllerFromInstanceID(e.cbutton.which)));
+    } else if (e.type == SDL_CONTROLLERAXISMOTION &&
+               (e.caxis.value > 16000 || e.caxis.value < -16000)) {
+        recomp_runtime_ui_set_input_family(
+            ui, pad_input_family(SDL_GameControllerFromInstanceID(e.caxis.which)));
+    }
+}
+#endif
+
 bool runtime_ui_event(Backend* b, const SDL_Event& e) {
     RecompRuntimeUi* ui = b->runtime_ui;
     if (!ui) return false;
+#if defined(RECOMP_RUNTIME_UI_HAS_INPUT_FAMILY)
+    note_input_family(ui, e);
+#endif
     // From a controller the menu opens and closes with a stick click (L3/R3,
     // which GBA games have no use for) or the Select+Start chord, for
     // handhelds whose Guide/Home button belongs to the system. Start also
@@ -1852,6 +1914,11 @@ bool runtime_ui_event(Backend* b, const SDL_Event& e) {
     if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
         switch (e.key.keysym.scancode) {
             case SDL_SCANCODE_ESCAPE:
+                // Esc resumes the game from any page (the footer says so);
+                // Backspace steps back one page.
+                if (pressed && !repeat) recomp_runtime_ui_close(ui);
+                return true;
+            case SDL_SCANCODE_BACKSPACE:
             case SDL_SCANCODE_AC_BACK: input = RECOMP_RUNTIME_UI_INPUT_BACK; break;
             case SDL_SCANCODE_UP: input = RECOMP_RUNTIME_UI_INPUT_UP; break;
             case SDL_SCANCODE_DOWN: input = RECOMP_RUNTIME_UI_INPUT_DOWN; break;
