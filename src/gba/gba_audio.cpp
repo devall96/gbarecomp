@@ -979,6 +979,13 @@ void GbaAudio::configure_shadow(const std::vector<Mp2kSig>& sigs,
 }
 
 void GbaAudio::set_shadow_enabled(bool on) {
+    if (external_) {
+        if (on == shadow_enabled_) return;
+        if (on) external_->reset();
+        shadow_enabled_ = on;
+        std::fprintf(stderr, "[audio] native game mixer %s by the player\n", on ? "ON" : "off");
+        return;
+    }
     if (!shadow_.armed() || on == shadow_enabled_) return;
     if (on) {
         shadow_ = Mp2kShadow{};  // voices and verifier start over
@@ -991,6 +998,7 @@ void GbaAudio::set_shadow_enabled(bool on) {
 }
 
 std::size_t GbaAudio::shadow_hook_pcs(uint32_t* out, std::size_t max) const {
+    if (external_) return external_->hook_pcs(out, max);
     if (!shadow_.armed()) return 0;
     std::size_t n = 0;
     for (const auto& sig : shadow_sigs_) {
@@ -1001,6 +1009,11 @@ std::size_t GbaAudio::shadow_hook_pcs(uint32_t* out, std::size_t max) const {
 }
 
 void GbaAudio::shadow_driver_tick(uint32_t pc, bool thumb) {
+    if (external_) {
+        // Snapshot even while off, so switching on resumes without a gap.
+        external_->on_hook(pc, thumb, shadow_mem_);
+        return;
+    }
     // Each tick, at its exact point: a fixed-rate poll drifts against the
     // driver's VBlank cadence and mostly finds SoundInfo idle (not 'Smsh'+1),
     // or past the mixer's note-on processing.
@@ -1009,6 +1022,7 @@ void GbaAudio::shadow_driver_tick(uint32_t pc, bool thumb) {
 }
 
 void GbaAudio::log_shadow_summary(const char* when) const {
+    if (external_) { external_->log_summary(when); return; }
     if (!shadow_.armed() || shadow_enabled_samples_ == 0) return;
     const double rate = sample_rate() ? sample_rate() : 65536.0;
     std::fprintf(stderr,
@@ -1056,9 +1070,16 @@ int16_t GbaAudio::psg_low_pass(int16_t in, PsgLowPass& f) {
 void GbaAudio::mix_slot(uint32_t slot) {
     bool substitute = false;
     float sl = 0.0f, sr = 0.0f;
+    // A game's native mixer renders FIFO-domain samples at the grid rate.
+    bool external_live = false;
+    float ext_a = 0.0f, ext_b = 0.0f;
+    if (shadow_enabled_ && external_) {
+        external_live = external_->render(sample_rate(), ext_a, ext_b);
+        substitute = external_live;
+    }
     // Mp2kShadow advances on a fixed 65536-Hz grid. Other SOUNDBIAS rates
     // retain the faithful mixer until rate-aware shadow rendering exists.
-    if (shadow_enabled_ && sample_rate() == 65536u) {
+    if (!external_ && shadow_enabled_ && sample_rate() == 65536u) {
         std::string degraded;
         shadow_.render(shadow_mem_, fifo_a_.samples[slot],
                        fifo_b_.samples[slot], sl, sr, degraded);
@@ -1091,8 +1112,8 @@ void GbaAudio::mix_slot(uint32_t slot) {
         // its level against the PSG channels. The former fixed 24000
         // scale played it about 12 dB low (a full-scale DAC gave 6000
         // against the canon's 24576).
-        const float fifo_a = sr * 512.0f;
-        const float fifo_b = sl * 512.0f;
+        const float fifo_a = external_live ? ext_a : sr * 512.0f;
+        const float fifo_b = external_live ? ext_b : sl * 512.0f;
         const float a = fifo_a * (direct_a_full_volume_ ? 4.0f : 2.0f);
         const float b = fifo_b * (direct_b_full_volume_ ? 4.0f : 2.0f);
         const float direct_left =

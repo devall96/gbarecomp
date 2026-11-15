@@ -2039,6 +2039,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                               (se && se[0] && se[0] != '0'));
     }
     bus.set_rom(rom.data(), rom.size());
+    if (opts.audio_direct_source) bus.audio().set_external_source(opts.audio_direct_source);
     // The MP2K audio shadow re-reads the driver's channels once per tick, at
     // the mixer's entry (SoundMainRAM), which guest code reaches through
     // dispatch. Observing only; nothing is installed when the ROM has no MP2K.

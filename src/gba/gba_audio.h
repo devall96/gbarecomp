@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -30,6 +31,24 @@
 namespace gbarecomp::debug { class SnapshotWriter; class SnapshotReader; }
 
 namespace gba {
+
+// A game-supplied replacement for the direct-sound FIFO pair: a native mixer
+// for a custom sound engine (the counterpart of the MP2K shadow). The runtime
+// calls on_hook() whenever guest code dispatches to one of hook_pcs() (with
+// a side-effect-free view of memory), and, while the player has Enhanced
+// audio on, mix_slot() asks render() for each output sample. render() returns
+// false to keep the hardware mix for that sample. Values are FIFO-domain
+// signed-8-bit units (127 = full scale), A and B as the guest routes them.
+// Presentation only: it must never write guest state.
+class ExternalDirectSource {
+public:
+    virtual ~ExternalDirectSource() = default;
+    virtual std::size_t hook_pcs(uint32_t* out, std::size_t max) const = 0;
+    virtual void on_hook(uint32_t pc, bool thumb, const MemView& mem) = 0;
+    virtual bool render(uint32_t grid_rate, float& fifo_a, float& fifo_b) = 0;
+    virtual void reset() = 0;
+    virtual void log_summary(const char* when) const { (void)when; }
+};
 
 class GbaAudio {
 public:
@@ -170,7 +189,16 @@ public:
                           bool enable_request);
     bool shadow_live() const { return shadow_enabled_ && shadow_.live(); }
     // The ROM links MP2K, so the shadow can be switched on.
-    bool shadow_available() const { return shadow_.armed(); }
+    bool shadow_available() const { return shadow_.armed() || external_ != nullptr; }
+    // A game's native mixer for a non-MP2K engine. It takes over the
+    // Enhanced audio toggle; set before the runtime collects hook PCs.
+    void set_external_source(ExternalDirectSource* source) {
+        external_ = source;
+        // GBARECOMP_AUDIO_SHADOW=1 also switches a game's native mixer on
+        // (headless captures, tests); the in-game toggle does it otherwise.
+        if (const char* e = std::getenv("GBARECOMP_AUDIO_SHADOW"))
+            shadow_enabled_ = external_ && !(e[0] == '0' && e[1] == '\0');
+    }
     bool shadow_enabled() const { return shadow_enabled_; }
     // Player toggle (in-game menu). Switching on starts from a fresh shadow
     // that has to prove itself again; switching off returns to the canon
@@ -393,6 +421,7 @@ private:
     std::vector<Mp2kSig> shadow_sigs_;  // kept to re-arm on a player toggle
     MemView    shadow_mem_{};
     bool       shadow_enabled_ = false;
+    ExternalDirectSource* external_ = nullptr;
     uint64_t   shadow_cursor_ = 0;          // running grid-sample count
     uint64_t   shadow_enabled_samples_ = 0;  // samples rendered while enabled
     uint64_t   shadow_live_samples_ = 0;     // ... of which substituted

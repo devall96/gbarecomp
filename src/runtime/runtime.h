@@ -13,6 +13,8 @@
 #include <string>
 #include "../armv4t/native_program.h"
 
+namespace gba { class ExternalDirectSource; }
+
 namespace gbarecomp {
 struct GbaNetplayLaunch;
 struct ViewGeometry;
@@ -381,6 +383,10 @@ struct RunOptions {
     const char* desktop_entry_comment = nullptr;
     const char* desktop_entry_icon_ico = nullptr;
     const char* desktop_entry_icon_png = nullptr;
+    // A game's native mixer for a non-MP2K sound engine (see
+    // gba::ExternalDirectSource). It drives the in-game Enhanced audio
+    // toggle; null keeps the hardware mix (and MP2K's shadow when present).
+    gba::ExternalDirectSource* audio_direct_source = nullptr;
 };
 
 // Read only the same config/region overlays and CLI save override as boot.
