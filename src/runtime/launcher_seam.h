@@ -916,6 +916,7 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     RecompLauncherCGameInfo gi;
     std::memset(&gi, 0, sizeof(gi));
     launcher_profile_apply("gba", &gi);   // GBA identity + capability defaults
+    if (opts.ui_theme && opts.ui_theme[0]) gi.theme = opts.ui_theme;
     gi.name = opts.builtin_game_name ? opts.builtin_game_name : "GBA cartridge";
     gi.region = opts.launcher_region;
     // SHA-1 is gbarecomp's real ROM identity gate — hand the launcher the

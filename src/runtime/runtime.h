@@ -367,6 +367,10 @@ struct RunOptions {
     // null => the launcher's default "assets/img/boxart.tga". Multi-variant
     // repos stage one file per variant (e.g. "assets/img/boxart_firered.tga").
     const char* launcher_boxart = nullptr;
+    // Launcher and in-game menu theme: a recomp-ui built-in name, optionally
+    // followed by ";token=value" overrides (e.g. "gba;accent=#A0E010").
+    // Null keeps the GBA look. Older recomp-ui pins ignore the overrides.
+    const char* ui_theme = nullptr;
 };
 
 // Read only the same config/region overlays and CLI save override as boot.

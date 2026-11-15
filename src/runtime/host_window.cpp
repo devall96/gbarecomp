@@ -3749,6 +3749,14 @@ HostWindow::Events HostWindow::pump() {
             SDL_Keycode sym = e.key.keysym.sym;
             Uint16 mods = e.key.keysym.mod;
             if (sym == SDLK_ESCAPE) {
+#if defined(GBARECOMP_RUNTIME_UI)
+                // With the in-game menu built in, Esc opens it (its Quit row
+                // asks for confirmation) instead of ending the session; an
+                // open menu already consumed Esc as Back above.
+                if (b->runtime_ui && !recomp_runtime_ui_is_open(b->runtime_ui))
+                    recomp_runtime_ui_open(b->runtime_ui);
+                else
+#endif
                 ev.quit = true;
             } else if (sym >= SDLK_F1 && sym <= SDLK_F9) {
                 int slot = static_cast<int>(sym - SDLK_F1) + 1;
