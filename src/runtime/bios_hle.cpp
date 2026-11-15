@@ -613,6 +613,14 @@ void bios_hle_boot_skip(uint32_t cart_entry) {
     // its own during init. Zero = none yet. (IME defaults to 0, so no IRQ can
     // vector before the game programs IE/IME anyway.)
     bus_write_u32(0x03007FFCu, 0);
+    // The real boot leaves the BG2/BG3 affine matrices at identity (PA = PD
+    // = 0x0100; mGBA's skip-BIOS does the same). Left at 0, a game that turns
+    // on a bitmap or affine BG without writing them first draws one stretched
+    // pixel: Frogger's Adventures' title screen came up as a solid colour.
+    bus_write_u16(0x04000020u, 0x0100u);   // BG2PA
+    bus_write_u16(0x04000026u, 0x0100u);   // BG2PD
+    bus_write_u16(0x04000030u, 0x0100u);   // BG3PA
+    bus_write_u16(0x04000036u, 0x0100u);   // BG3PD
 }
 
 BiosHleMode bios_hle_mode() { return g_mode; }

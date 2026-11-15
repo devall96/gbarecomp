@@ -34,6 +34,11 @@ namespace gbarecomp {
 
 class HostOverlay;
 
+// Reads a 0/1 key from config.ini [Launcher] next to the executable before any
+// window exists (choices that must be settled before boot).
+bool host_launcher_flag(const char* exe_dir, const char* config_filename,
+                        const char* key, bool fallback);
+
 class HostWindow {
 public:
     HostWindow();
@@ -129,6 +134,11 @@ public:
     // Pause the game while the window does not have focus (default on).
     void set_pause_unfocused(bool enabled);
     bool pause_unfocused() const;
+    // Fast boot (games that offer it via RunOptions::fast_boot_frames): the
+    // choice applies at the next launch, read before the window opens with
+    // host_launcher_flag().
+    void set_fast_boot(bool enabled);
+    bool fast_boot() const;
     // The player's enhanced-audio (MP2K shadow) choice, remembered in
     // config.ini [Audio] next to [Touch]. saved_audio_enhanced() returns
     // false until the player has chosen.

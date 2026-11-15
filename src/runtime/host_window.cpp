@@ -510,6 +510,7 @@ struct Backend {
     int lcd_grid_strength = 40;
     bool lcd_ghosting = false;
     bool pause_unfocused = true;
+    bool fast_boot = true;
     std::vector<uint8_t> ghost_prev;  // previous presented RGB888 frame
     std::vector<uint8_t> ghost_mix;   // blended copy that is uploaded
 
@@ -3083,6 +3084,7 @@ void HostWindow::load_input_config(const char* dir,
             b->lcd_grid_strength = std::clamp(std::atoi(val), 0, 100);
         else if (SDL_strcasecmp(key, "lcd_ghosting") == 0) b->lcd_ghosting = std::atoi(val) != 0;
         else if (SDL_strcasecmp(key, "pause_unfocused") == 0) b->pause_unfocused = std::atoi(val) != 0;
+        else if (SDL_strcasecmp(key, "fast_boot") == 0) b->fast_boot = std::atoi(val) != 0;
     });
     const std::string keybinds_path=(std::filesystem::path(dir)/(keybinds_filename&&keybinds_filename[0]?keybinds_filename:"keybinds.ini")).string();
 #if defined(GBARECOMP_GBA_PAD_BINDS)
@@ -3356,6 +3358,29 @@ void HostWindow::set_pause_unfocused(bool enabled) {
 
 bool HostWindow::pause_unfocused() const {
     return !open_ || !impl_ || static_cast<const Backend*>(impl_)->pause_unfocused;
+}
+
+void HostWindow::set_fast_boot(bool enabled) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->fast_boot = enabled;
+    save_launcher_keys(b->launcher_config_path, {{"fast_boot", enabled ? "1" : "0"}});
+}
+
+bool HostWindow::fast_boot() const {
+    return !open_ || !impl_ || static_cast<const Backend*>(impl_)->fast_boot;
+}
+
+bool host_launcher_flag(const char* exe_dir, const char* config_filename,
+                        const char* key, bool fallback) {
+    if (!exe_dir || !key) return fallback;
+    const std::string path = (std::filesystem::path(exe_dir) /
+        (config_filename && config_filename[0] ? config_filename : "config.ini")).string();
+    bool value = fallback;
+    ini_scan_section(path.c_str(), "Launcher", [&](const char* k, const char* v) {
+        if (SDL_strcasecmp(k, key) == 0) value = std::atoi(v) != 0;
+    });
+    return value;
 }
 
 bool HostWindow::lcd_ghosting() const {
@@ -4129,4 +4154,19 @@ HostWindow::Events HostWindow::pump() {
 
 }  // namespace gbarecomp
 
+// Presentation and system choices have no effect without SDL.
+void HostWindow::set_sharp_filter(bool) {}
+bool HostWindow::sharp_filter() const { return false; }
+void HostWindow::set_screen_kind(int) {}
+int HostWindow::screen_kind() const { return 0; }
+void HostWindow::set_lcd_grid(bool, int) {}
+bool HostWindow::lcd_grid() const { return false; }
+int HostWindow::lcd_grid_strength() const { return 0; }
+void HostWindow::set_lcd_ghosting(bool) {}
+bool HostWindow::lcd_ghosting() const { return false; }
+void HostWindow::set_pause_unfocused(bool) {}
+bool HostWindow::pause_unfocused() const { return false; }
+void HostWindow::set_fast_boot(bool) {}
+bool HostWindow::fast_boot() const { return true; }
+bool host_launcher_flag(const char*, const char*, const char*, bool fallback) { return fallback; }
 #endif  // GBARECOMP_HAVE_SDL2

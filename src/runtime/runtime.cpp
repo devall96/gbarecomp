@@ -271,6 +271,7 @@ struct Args {
 #define GBARECOMP_UI_KEY_LCD_GRID_STRENGTH "graphics.lcd_grid_strength"
 #define GBARECOMP_UI_KEY_LCD_GHOSTING "graphics.lcd_ghosting"
 #define GBARECOMP_UI_KEY_PAUSE_UNFOCUSED "system.pause_unfocused"
+#define GBARECOMP_UI_KEY_FAST_BOOT "system.fast_boot"
 
 struct RuntimeUiContext {
     HostWindow* window = nullptr;
@@ -315,6 +316,7 @@ int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID_STRENGTH) == 0) *out = c->window->lcd_grid_strength();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0) *out = c->window->lcd_ghosting();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0) *out = c->window->pause_unfocused();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_BOOT) == 0) *out = c->window->fast_boot();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) *out = c->window->audio_enabled();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) *out = c->window->volume();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0) *out = c->state_slot;
@@ -369,6 +371,8 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
         c->window->set_lcd_ghosting(value != 0);
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0)
         c->window->set_pause_unfocused(value != 0);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_BOOT) == 0)
+        c->window->set_fast_boot(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0)
         c->window->set_audio_enabled(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0)
@@ -2312,6 +2316,25 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // directly, so a game can drop the boot logo/chime for launch convenience
     // while keeping pure LLE SWI servicing. Unset (-1) reproduces the original
     // coupling exactly, so existing configs are untouched.
+    // Fast boot (player choice, game opt-in). An explicit skip_intro setting
+    // (toml, CLI, env) and scripted runs keep their exact boot path.
+    uint64_t boot_turbo_until = 0;
+    if (opts.fast_boot_frames > 0 && args.window && args.bios_skip_intro < 0 &&
+        args.frames < 0 && args.load_state.empty() &&
+        !std::getenv("GBARECOMP_INPUT_REPLAY")) {
+        std::string exe_dir = ".";
+        if (argc > 0 && argv[0] && argv[0][0]) {
+            std::filesystem::path p(argv[0]);
+            if (p.has_parent_path()) exe_dir = p.parent_path().string();
+        }
+        if (host_launcher_flag(exe_dir.c_str(), opts.launcher_config_filename,
+                               "fast_boot", true)) {
+            args.bios_skip_intro = 1;
+            boot_turbo_until = opts.fast_boot_frames;
+            if (!args.quiet) std::printf("fast_boot: on (%u turbo frames)\n",
+                                         opts.fast_boot_frames);
+        }
+    }
     const bool skip_default = args.bios_hle && !args.bios_hle_keep_intro;
     const bool skip_requested = args.bios_skip_intro < 0
                                     ? skip_default
@@ -3609,6 +3632,15 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         unfocused_item.description = "Pause the game while you are in another window, and carry on when you come back.";
         unfocused_item.type = RECOMP_RUNTIME_UI_BOOL;
         runtime_ui_extras.push_back(unfocused_item);
+        if (opts.fast_boot_frames > 0) {
+            RecompRuntimeUiItem fast_boot_item{};
+            fast_boot_item.key = GBARECOMP_UI_KEY_FAST_BOOT;
+            fast_boot_item.section = "System";
+            fast_boot_item.label = "Fast boot";
+            fast_boot_item.description = "Skip the start-up logos and go straight to the title screen. Takes effect next time you start the game.";
+            fast_boot_item.type = RECOMP_RUNTIME_UI_BOOL;
+            runtime_ui_extras.push_back(fast_boot_item);
+        }
 #if !defined(__ANDROID__)
         runtime_ui_config.features |=
             RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
@@ -4219,6 +4251,16 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
 #endif
         fast_forward_active = assist_tools_enabled() &&
                               (ev.fast_forward || fast_forward_latched);
+        // Fast boot: run the unskippable logos at turbo, presenting one frame
+        // in 60 (audio is dropped while fast-forwarding).
+        if (boot_turbo_until) {
+            if (ppu.frame_count() < boot_turbo_until) {
+                fast_forward_active = true;
+                fast_forward_multiplier = 60;
+            } else {
+                boot_turbo_until = 0;
+            }
+        }
         // System hotkeys (config.ini [KeyMap], rebindable in the launcher).
         if (ev.toggle_fullscreen) {
             // Toggle between windowed and the configured mode. A session

@@ -161,6 +161,12 @@ struct RunOptions {
     // its resource bounds; the implementation remains engine-owned and
     // reusable. Slot hotkeys continue to cover 1-9, while menus can reach 10.
     bool expose_assist_tools = false;
+    // Fast boot: games whose start-up logos cannot be skipped set how many
+    // guest frames (counted from the cart entry) to run at turbo, muted and
+    // mostly unpresented, after skipping the BIOS intro. Non-zero adds a
+    // "Fast boot" choice (System, default on) applied at the next launch.
+    // Scripted runs (--frames, input replay, headless) keep the exact boot.
+    std::uint32_t fast_boot_frames = 0;
     bool assist_tools_enabled_by_default = true;
     // Always-on diagnostic replay capture for interactive windowed sessions
     // (docs/DIAGNOSTIC_REPLAY.md). Players opt out with GBARECOMP_DIAGNOSTICS=0
