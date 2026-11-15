@@ -1561,7 +1561,20 @@ void render_host_layers(Backend* b) {
         ImGui::NewFrame();
         ImGuiOverlay ov(b, ImGui::GetBackgroundDrawList(), now);
         draw_host_chrome(b, ov, menu_open);
-        if (menu_open) recomp_runtime_ui_render_imgui(b->runtime_ui);
+        if (menu_open) {
+            // Lay the menu over the game picture, not the letterbox bars:
+            // last_layout is in drawable pixels, ImGui works in window points.
+            const ImVec2 disp = ImGui::GetIO().DisplaySize;
+            const float sx = b->last_drawable_w > 0 ? disp.x / b->last_drawable_w : 1.0f;
+            const float sy = b->last_drawable_h > 0 ? disp.y / b->last_drawable_h : 1.0f;
+            const PresentationLayout& lay = b->last_layout;
+            if (lay.width > 0 && lay.height > 0)
+                recomp_runtime_ui_set_viewport(b->runtime_ui, lay.x * sx, lay.y * sy,
+                                               lay.width * sx, lay.height * sy);
+            else
+                recomp_runtime_ui_set_viewport(b->runtime_ui, 0, 0, 0, 0);
+            recomp_runtime_ui_render_imgui(b->runtime_ui);
+        }
         ImGui::Render();
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), b->renderer);
     } else
