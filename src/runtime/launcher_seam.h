@@ -917,6 +917,36 @@ inline int gbarecomp_launcher_preboot(std::vector<std::string>& args,
     std::memset(&gi, 0, sizeof(gi));
     launcher_profile_apply("gba", &gi);   // GBA identity + capability defaults
     if (opts.ui_theme && opts.ui_theme[0]) gi.theme = opts.ui_theme;
+    // Settings > INSTALL: absolute icon paths beside the exe, and the game
+    // config's directory as the shortcut's working directory.
+    std::string lde_ico, lde_png, lde_workdir;
+    if (opts.desktop_entry_id && opts.desktop_entry_id[0]) {
+        std::error_code lde_ec;
+        auto beside_exe = [&](const char* rel) -> std::string {
+            if (!rel || !rel[0]) return {};
+            std::filesystem::path p = std::filesystem::path(dir) / rel;
+            if (!std::filesystem::exists(p, lde_ec)) return {};
+            return std::filesystem::absolute(p, lde_ec).string();
+        };
+        lde_ico = beside_exe(opts.desktop_entry_icon_ico);
+        lde_png = beside_exe(opts.desktop_entry_icon_png);
+        const char* cfg = opts.launcher_game_config && opts.launcher_game_config[0]
+            ? opts.launcher_game_config : "game.toml";
+        for (const std::filesystem::path& c : {std::filesystem::current_path(lde_ec) / cfg,
+                                               std::filesystem::path(dir) / cfg,
+                                               std::filesystem::path(dir).parent_path() / cfg}) {
+            if (std::filesystem::exists(c, lde_ec)) {
+                lde_workdir = std::filesystem::absolute(c, lde_ec).parent_path().string();
+                break;
+            }
+        }
+        gi.desktop_entry_id = opts.desktop_entry_id;
+        gi.desktop_entry_name = opts.desktop_entry_name;
+        gi.desktop_entry_comment = opts.desktop_entry_comment;
+        gi.desktop_entry_icon_ico = lde_ico.empty() ? nullptr : lde_ico.c_str();
+        gi.desktop_entry_icon_png = lde_png.empty() ? nullptr : lde_png.c_str();
+        gi.desktop_entry_workdir = lde_workdir.empty() ? nullptr : lde_workdir.c_str();
+    }
     gi.name = opts.builtin_game_name ? opts.builtin_game_name : "GBA cartridge";
     gi.region = opts.launcher_region;
     // SHA-1 is gbarecomp's real ROM identity gate — hand the launcher the

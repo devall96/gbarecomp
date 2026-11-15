@@ -371,6 +371,16 @@ struct RunOptions {
     // followed by ";token=value" overrides (e.g. "gba;accent=#A0E010").
     // Null keeps the GBA look. Older recomp-ui pins ignore the overrides.
     const char* ui_theme = nullptr;
+    // Optional desktop integration in the launcher's Settings > INSTALL card
+    // (desktop shortcut, Start menu / applications menu). Null id hides it.
+    // Icon paths are relative to the executable's directory (.ico for
+    // Windows, 256x256 .png for Linux). The shortcut starts in the directory
+    // that holds the game config, so a direct boot finds game.toml.
+    const char* desktop_entry_id = nullptr;
+    const char* desktop_entry_name = nullptr;
+    const char* desktop_entry_comment = nullptr;
+    const char* desktop_entry_icon_ico = nullptr;
+    const char* desktop_entry_icon_png = nullptr;
 };
 
 // Read only the same config/region overlays and CLI save override as boot.
