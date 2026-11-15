@@ -483,6 +483,17 @@ void GbaAudio::ch4_trigger() {
 }
 
 void GbaAudio::ring_push(StereoFrame s, uint8_t rate_tag) {
+    // Diagnostics: GBARECOMP_AUDIO_RAW=<path> appends every mixed stereo
+    // frame (s16 L, s16 R, little-endian, at the SOUNDBIAS grid rate) so
+    // headless runs can compare mixes byte for byte.
+    static std::FILE* raw = [] {
+        const char* p = std::getenv("GBARECOMP_AUDIO_RAW");
+        return p && p[0] ? std::fopen(p, "wb") : nullptr;
+    }();
+    if (raw) {
+        const int16_t lr[2] = {s.left, s.right};
+        std::fwrite(lr, sizeof lr, 1, raw);
+    }
     ring_[ring_head_] = s;
     ring_rate_[ring_head_] = rate_tag;
     ring_head_ = (ring_head_ + 1) % kRingSize;
@@ -689,16 +700,54 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
     // bits independently gate the left and right output buses.
     int32_t ch1_sample = 0;
     int32_t ch2_sample = 0;
+    // Enhanced output (a game's native mixer substitutes the FIFO mix): the
+    // square and noise channels report the AVERAGE of their waveform over
+    // this output sample instead of its value at one instant, which removes
+    // most of the aliasing hard edges produce at the 32-65 kHz grid. The
+    // average is observed from the unchanged stepping below, so channel state
+    // evolves identically either way; the canon mix is untouched. Values in
+    // *_fp carry kPsgFracBits extra fractional bits.
+    // GBARECOMP_PSG_SMOOTH=0 keeps point sampling on the enhanced path too
+    // (A/B listening and tests).
+    static const bool smooth_allowed = [] {
+        const char* e = std::getenv("GBARECOMP_PSG_SMOOTH");
+        return !(e && e[0] == '0');
+    }();
+    const bool smooth = !include_direct && smooth_allowed;
+    constexpr int kPsgFracBits = 6;
+    int32_t ch1_fp = 0, ch2_fp = 0, ch4_fp = 0;
+    const uint32_t cps = cycles_per_sample_;
+    // Time (cycles into this sample) of the k-th step of a stepper whose
+    // accumulator held `old` before this sample's `cps` cycles were added.
+    auto step_time = [cps](uint32_t k, uint32_t period, uint32_t old) -> int64_t {
+        int64_t t = static_cast<int64_t>(k) * period - static_cast<int64_t>(old);
+        return t < 0 ? 0 : (t > cps ? cps : t);
+    };
+    auto to_fp = [cps](int64_t acc, uint8_t volume) -> int32_t {
+        // acc = sum(+-1 x cycles); scale to volume with kPsgFracBits bits.
+        const int64_t num = acc * static_cast<int64_t>(volume) * (1 << kPsgFracBits);
+        return static_cast<int32_t>(num >= 0 ? (num + cps / 2) / cps : -((-num + cps / 2) / cps));
+    };
 
     // ── Channel 1 (square + sweep) ───────────────────────────────
     if (ch1_.active) {
         uint32_t freq_period = (2048u - ch1_.frequency) * 16u;
         if (freq_period == 0) freq_period = 16u;
+        const uint32_t ch1_old = ch1_.waveform_cycles;
+        int64_t ch1_acc = 0, ch1_t = 0;
+        uint32_t ch1_k = 0;
         ch1_.waveform_cycles += cycles_per_sample_;
         while (ch1_.waveform_cycles >= freq_period) {
             ch1_.waveform_cycles -= freq_period;
+            if (smooth) {
+                const int64_t tk = step_time(++ch1_k, freq_period, ch1_old);
+                ch1_acc += (kDutyPatterns[ch1_.duty][ch1_.waveform_phase] ? 1 : -1) * (tk - ch1_t);
+                ch1_t = tk;
+            }
             ch1_.waveform_phase = (ch1_.waveform_phase + 1) & 7;
         }
+        if (smooth)
+            ch1_acc += (kDutyPatterns[ch1_.duty][ch1_.waveform_phase] ? 1 : -1) * (cps - ch1_t);
         if (ch1_.envelope_step != 0) {
             ++ch1_.envelope_cycles;
             uint32_t env_period = ch1_.envelope_step * (sample_rate() / 64u);
@@ -746,6 +795,7 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
         if (ch1_.active) {
             uint8_t high = kDutyPatterns[ch1_.duty][ch1_.waveform_phase];
             ch1_sample = (high ? 1 : -1) * static_cast<int32_t>(ch1_.volume);
+            ch1_fp = smooth ? to_fp(ch1_acc, ch1_.volume) : ch1_sample * (1 << kPsgFracBits);
         }
     }
 
@@ -756,11 +806,21 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
         // period is 8 phases, so the per-phase increment in cycles
         // is (2048 - freq) * 16. (Per GBATEK § "GBA Sound Channel 2".)
         uint32_t freq_period = (2048u - ch2_.frequency) * 16u;
+        const uint32_t ch2_old = ch2_.waveform_cycles;
+        int64_t ch2_acc = 0, ch2_t = 0;
+        uint32_t ch2_k = 0;
         ch2_.waveform_cycles += cycles_per_sample_;
         while (ch2_.waveform_cycles >= freq_period) {
             ch2_.waveform_cycles -= freq_period;
+            if (smooth) {
+                const int64_t tk = step_time(++ch2_k, freq_period, ch2_old);
+                ch2_acc += (kDutyPatterns[ch2_.duty][ch2_.waveform_phase] ? 1 : -1) * (tk - ch2_t);
+                ch2_t = tk;
+            }
             ch2_.waveform_phase = (ch2_.waveform_phase + 1) & 7;
         }
+        if (smooth)
+            ch2_acc += (kDutyPatterns[ch2_.duty][ch2_.waveform_phase] ? 1 : -1) * (cps - ch2_t);
         // Envelope clock: 1/64 second per step = kSampleRate/64 = 512
         // sample-ticks per step.
         if (ch2_.envelope_step != 0) {
@@ -789,6 +849,7 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
         if (ch2_.active) {
             uint8_t high = kDutyPatterns[ch2_.duty][ch2_.waveform_phase];
             ch2_sample = (high ? 1 : -1) * static_cast<int32_t>(ch2_.volume);
+            ch2_fp = smooth ? to_fp(ch2_acc, ch2_.volume) : ch2_sample * (1 << kPsgFracBits);
         }
     }
 
@@ -848,9 +909,17 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
         uint32_t step_period =
             (kNoiseDiv[ch4_.divisor_code] << ch4_.shift) * 4u;
         if (step_period == 0) step_period = 4u;
+        const uint32_t ch4_old = ch4_.noise_cycles;
+        int64_t ch4_acc = 0, ch4_t = 0;
+        uint32_t ch4_k = 0;
         ch4_.noise_cycles += cycles_per_sample_;
         while (ch4_.noise_cycles >= step_period) {
             ch4_.noise_cycles -= step_period;
+            if (smooth) {
+                const int64_t tk = step_time(++ch4_k, step_period, ch4_old);
+                ch4_acc += ((ch4_.lfsr & 1u) == 0 ? 1 : -1) * (tk - ch4_t);
+                ch4_t = tk;
+            }
             uint32_t fb = (ch4_.lfsr ^ (ch4_.lfsr >> 1)) & 1u;
             ch4_.lfsr = static_cast<uint16_t>((ch4_.lfsr >> 1) | (fb << 14));
             if (ch4_.width_7bit) {
@@ -858,6 +927,8 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
                     (ch4_.lfsr & ~(1u << 6)) | (fb << 6));
             }
         }
+        if (smooth)
+            ch4_acc += ((ch4_.lfsr & 1u) == 0 ? 1 : -1) * (cps - ch4_t);
         if (ch4_.envelope_step != 0) {
             ++ch4_.envelope_cycles;
             uint32_t env_period = ch4_.envelope_step * (sample_rate() / 64u);
@@ -884,6 +955,7 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
             // Output is high when LFSR bit 0 is 0.
             int32_t high = ((ch4_.lfsr & 1u) == 0) ? 1 : -1;
             ch4_sample = high * static_cast<int32_t>(ch4_.volume);
+            ch4_fp = smooth ? to_fp(ch4_acc, ch4_.volume) : ch4_sample * (1 << kPsgFracBits);
         }
     }
 
@@ -912,6 +984,20 @@ GbaAudio::StereoFrame GbaAudio::mix_one_sample(uint32_t direct_slot, bool includ
     constexpr int32_t kGain = 600;
     int32_t out_left=(((mix_left*volume_l_)/7)*dmg_scale_num/dmg_scale_den)*kGain;
     int32_t out_right=(((mix_right*volume_r_)/7)*dmg_scale_num/dmg_scale_den)*kGain;
+    if (smooth) {
+        // Same routing and gain, with the averaged channels' fraction kept.
+        const int32_t ch3_fp = ch3_sample * (1 << kPsgFracBits);
+        int64_t fl = 0, fr = 0;
+        auto route_fp = [&](int32_t v, bool l, bool r) { if (l) fl += v; if (r) fr += v; };
+        route_fp(ch1_fp, ch1_left_enable_, ch1_right_enable_);
+        route_fp(ch2_fp, ch2_left_enable_, ch2_right_enable_);
+        route_fp(ch3_fp, ch3_left_enable_, ch3_right_enable_);
+        route_fp(ch4_fp, ch4_left_enable_, ch4_right_enable_);
+        out_left = static_cast<int32_t>((fl * volume_l_ * dmg_scale_num * kGain) /
+                                        (7 * dmg_scale_den * (1 << kPsgFracBits)));
+        out_right = static_cast<int32_t>((fr * volume_r_ * dmg_scale_num * kGain) /
+                                         (7 * dmg_scale_den * (1 << kPsgFracBits)));
+    }
 
     // Direct Sound FIFO contribution. Omitted when the MP2K shadow is
     // substituting (the caller adds the shadow's direct mix instead).
