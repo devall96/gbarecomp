@@ -2039,7 +2039,13 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                               (se && se[0] && se[0] != '0'));
     }
     bus.set_rom(rom.data(), rom.size());
-    if (opts.audio_direct_source) bus.audio().set_external_source(opts.audio_direct_source);
+    if (opts.audio_direct_source) {
+        bus.audio().set_external_source(opts.audio_direct_source);
+        // [audio].shadow is the game's default for its native mixer too; the
+        // player's saved menu choice (applied later) and the env var win.
+        if (args.audio_shadow && !std::getenv("GBARECOMP_AUDIO_SHADOW"))
+            bus.audio().set_shadow_enabled(true);
+    }
     // The MP2K audio shadow re-reads the driver's channels once per tick, at
     // the mixer's entry (SoundMainRAM), which guest code reaches through
     // dispatch. Observing only; nothing is installed when the ROM has no MP2K.
