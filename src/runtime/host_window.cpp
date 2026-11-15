@@ -1423,6 +1423,36 @@ bool runtime_imgui_init(Backend* b) {
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     ImGui::StyleColorsDark();
+    {
+        // Menu fonts, rasterised large and drawn at window-relative sizes:
+        // Fonts[0] body, Fonts[1] bold, Fonts[2] title. A game supplies its
+        // own as assets/fonts/ui_body.ttf / ui_bold.ttf / ui_title.ttf; the
+        // launcher's Lato is the fallback. Arrow/shape glyphs are merged from
+        // Noto Sans Symbols 2. Missing files keep ImGui's built-in font.
+        std::string base;
+        if (char* p = SDL_GetBasePath()) { base = p; SDL_free(p); }
+        const std::string fonts = base + "assets/fonts/";
+        static const ImWchar kSymbols[] = {0x2190, 0x21FF, 0x25A0, 0x25FF, 0x2600, 0x26FF, 0};
+        auto add = [&](const char* file) -> bool {
+            const std::string path = fonts + file;
+            if (!std::filesystem::exists(path)) return false;
+            if (!io.Fonts->AddFontFromFileTTF(path.c_str(), 48.0f)) return false;
+            const std::string sym = fonts + "NotoSansSymbols2-Regular.ttf";
+            if (std::filesystem::exists(sym)) {
+                ImFontConfig merge;
+                merge.MergeMode = true;
+                io.Fonts->AddFontFromFileTTF(sym.c_str(), 44.0f, &merge, kSymbols);
+            }
+            return true;
+        };
+        auto pick = [&](const char* game_file, const char* fallback) -> const char* {
+            return std::filesystem::exists(fonts + game_file) ? game_file : fallback;
+        };
+        if (add(pick("ui_body.ttf", "LatoLatin-Regular.ttf"))) {
+            add(pick("ui_bold.ttf", "LatoLatin-Bold.ttf"));
+            add(pick("ui_title.ttf", "LatoLatin-Bold.ttf"));
+        }
+    }
 #if defined(__ANDROID__)
     io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
     io.FontGlobalScale = 1.75f;
@@ -1813,6 +1843,10 @@ bool runtime_ui_event(Backend* b, const SDL_Event& e) {
             case SDL_SCANCODE_RIGHT: input = RECOMP_RUNTIME_UI_INPUT_RIGHT; break;
             case SDL_SCANCODE_RETURN:
             case SDL_SCANCODE_SPACE: input = RECOMP_RUNTIME_UI_INPUT_ACCEPT; break;
+            case SDL_SCANCODE_Q:
+            case SDL_SCANCODE_PAGEUP: input = RECOMP_RUNTIME_UI_INPUT_PREV_TAB; break;
+            case SDL_SCANCODE_E:
+            case SDL_SCANCODE_PAGEDOWN: input = RECOMP_RUNTIME_UI_INPUT_NEXT_TAB; break;
             default: mapped = false; break;
         }
     } else {
@@ -1841,6 +1875,8 @@ bool runtime_ui_event(Backend* b, const SDL_Event& e) {
                 return false;
             case SDL_CONTROLLER_BUTTON_A: input = RECOMP_RUNTIME_UI_INPUT_ACCEPT; break;
             case SDL_CONTROLLER_BUTTON_B: input = RECOMP_RUNTIME_UI_INPUT_BACK; break;
+            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: input = RECOMP_RUNTIME_UI_INPUT_PREV_TAB; break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: input = RECOMP_RUNTIME_UI_INPUT_NEXT_TAB; break;
             default: mapped = false; break;
         }
     }
