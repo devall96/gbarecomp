@@ -505,6 +505,12 @@ struct Backend {
     int scanline_strength = 35;
     std::string launcher_config_path;
     bool sharp_filter = false;
+    int screen_kind = 0;              // runtime::ScreenKind index (0 = Raw)
+    bool lcd_grid = false;
+    int lcd_grid_strength = 40;
+    bool lcd_ghosting = false;
+    std::vector<uint8_t> ghost_prev;  // previous presented RGB888 frame
+    std::vector<uint8_t> ghost_mix;   // blended copy that is uploaded
 
     // ---- rebindable input (see HostWindow::load_input_config) --------------
     // GBA KEYINPUT bit (0..9) per bound SDL scancode; seeded from the
@@ -1631,7 +1637,7 @@ PresentationLayout current_presentation_layout(Backend* b, int* out_w, int* out_
 #else
     // The fixed native desktop path presents through SDL's logical size,
     // which always centres; only explicit-destination paths can anchor.
-    const bool explicit_destination = b->expanded_view || b->resize_driven_view || b->integer_scale;
+    const bool explicit_destination = b->expanded_view || b->resize_driven_view || b->integer_scale || b->sharp_filter;
 #endif
     if (explicit_destination && b->anchor_top && drawable_h > drawable_w &&
         layout.height > 0 && layout.height < drawable_h) {
@@ -2082,7 +2088,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     SDL_RenderSetLogicalSize(b->renderer, 0, 0);
     SDL_SetRenderDrawColor(b->renderer, 0, 0, 0, 255);
 #else
-    if (b->expanded_view || b->resize_driven_view) {
+    if (b->expanded_view || b->resize_driven_view || b->sharp_filter) {
         // The destination viewport is computed explicitly in present() so
         // resizing maximally fills the drawable at the selected widescreen
         // aspect. Exact multiples retain integer scale; filtering follows the
@@ -2213,6 +2219,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     if (b->texture_format == SDL_PIXELFORMAT_ARGB8888) upload_order = runtime::UploadPixelOrder::Argb8888;
     else if (b->texture_format == SDL_PIXELFORMAT_ABGR8888) upload_order = runtime::UploadPixelOrder::Abgr8888;
     b->color_lut = std::make_unique<runtime::ColorLut>(resolve_color_settings(screen), upload_order);
+    b->screen_kind = static_cast<int>(resolve_color_settings(screen).screen);
     if (!b->color_lut->is_passthrough())
         b->graded_fb.resize(static_cast<std::size_t>(base_w) * base_h * 3);
 
@@ -2609,7 +2616,7 @@ bool HostWindow::set_surface_size(int base_w, int base_h) {
     // A live Display choice can cross between SDL's native logical viewport
     // and the explicit wide destination. Reset both coordinate systems, or
     // Native -> 16:9 draws drawable coordinates through the old 240x160 scale.
-    const bool explicit_view = b->expanded_view || b->resize_driven_view || b->integer_scale;
+    const bool explicit_view = b->expanded_view || b->resize_driven_view || b->integer_scale || b->sharp_filter;
     SDL_RenderSetLogicalSize(b->renderer, explicit_view ? 0 : base_w, explicit_view ? 0 : base_h);
     if (explicit_view) SDL_RenderSetViewport(b->renderer, nullptr);
     SDL_SetWindowResizable(b->window,
@@ -2654,6 +2661,7 @@ bool HostWindow::hd_jobs_available() {
 #if defined(GBARECOMP_ENABLE_HQ2X)
     if (hqx_scale()) return false; // The optional filter needs the CPU picture.
 #endif
+    if (open_ && impl_ && static_cast<Backend*>(impl_)->lcd_ghosting) return false; // CPU blend.
 #if defined(GBARECOMP_GPU_HD_EXPERIMENT)
     if (!open_ || !impl_) return false;
     auto* b = static_cast<Backend*>(impl_);
@@ -2726,6 +2734,21 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
     if (!rgb888 && !frame_texture) return;
     if (!sampled_w) sampled_w = unsigned(b->base_w);
     if (!sampled_h) sampled_h = unsigned(b->base_h);
+    if (rgb888 && b->lcd_ghosting) {
+        // Present-time LCD response: average with the previous frame. The
+        // guest framebuffer is never modified; a size change restarts it.
+        const std::size_t n = std::size_t(sampled_w) * sampled_h * 3;
+        if (b->ghost_prev.size() != n) {
+            b->ghost_prev.assign(rgb888, rgb888 + n);
+        } else {
+            b->ghost_mix.resize(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                b->ghost_mix[i] = uint8_t((unsigned(rgb888[i]) + b->ghost_prev[i] + 1) >> 1);
+                b->ghost_prev[i] = rgb888[i];
+            }
+            rgb888 = b->ghost_mix.data();
+        }
+    }
 #if defined(GBARECOMP_ENABLE_HQ2X)
     const unsigned hqx_factor = hqx_scale();
     if (rgb888 && hqx_factor) {
@@ -2880,7 +2903,7 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
     const SDL_Rect destination{layout.x, layout.y, layout.width, layout.height};
     SDL_RenderCopy(b->renderer, frame_texture, nullptr, &destination);
 #else
-    if (!b->expanded_view && !b->resize_driven_view && !b->integer_scale) {
+    if (!b->expanded_view && !b->resize_driven_view && !b->integer_scale && !b->sharp_filter) {
         SDL_RenderCopy(b->renderer, frame_texture, nullptr, nullptr);
     } else {
         if (layout.width > 0 && layout.height > 0) {
@@ -2935,6 +2958,33 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
         SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_NONE);
         SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
     }
+    // Present-time LCD pixel grid: thin dark gaps between game pixels, like
+    // the GBA panel's dot matrix. Needs >= 3 host pixels per game pixel.
+    if (b->lcd_grid && b->lcd_grid_strength > 0 &&
+        layout.height >= b->base_h * 3 && layout.width >= b->base_w * 3) {
+        int logical_w = 0, logical_h = 0;
+        SDL_RenderGetLogicalSize(b->renderer, &logical_w, &logical_h);
+        SDL_RenderSetLogicalSize(b->renderer, 0, 0);
+        SDL_RenderSetViewport(b->renderer, nullptr);
+        SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(b->renderer, 0, 0, 0,
+            static_cast<Uint8>(b->lcd_grid_strength * 255 / 100));
+        const int gap_h = std::max(1, layout.height / b->base_h / 4);
+        const int gap_w = std::max(1, layout.width / b->base_w / 4);
+        for (int y = 1; y < b->base_h; ++y) {
+            const int edge = layout.y + y * layout.height / b->base_h;
+            const SDL_Rect band{layout.x, edge, layout.width, gap_h};
+            SDL_RenderFillRect(b->renderer, &band);
+        }
+        for (int x = 1; x < b->base_w; ++x) {
+            const int edge = layout.x + x * layout.width / b->base_w;
+            const SDL_Rect band{edge, layout.y, gap_w, layout.height};
+            SDL_RenderFillRect(b->renderer, &band);
+        }
+        SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_NONE);
+        if (logical_w > 0 && logical_h > 0)
+            SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
+    }
     render_host_layers(b);
     // MC-WS-002: time the present itself (vsync blocks here — or doesn't)
     // and stamp the DWM refresh counter into the cadence ring.
@@ -2976,6 +3026,13 @@ void HostWindow::load_input_config(const char* dir,
         fast_forward_multiplier_default, 2, 10);
     const std::string config_path=(std::filesystem::path(dir)/(config_filename&&config_filename[0]?config_filename:"config.ini")).string();
     b->launcher_config_path = config_path;
+    // LCD presentation choices made in the in-game menu (config.ini [Launcher]).
+    ini_scan_section(config_path.c_str(), "Launcher", [b](const char* key, const char* val) {
+        if (SDL_strcasecmp(key, "lcd_grid") == 0) b->lcd_grid = std::atoi(val) != 0;
+        else if (SDL_strcasecmp(key, "lcd_grid_strength") == 0)
+            b->lcd_grid_strength = std::clamp(std::atoi(val), 0, 100);
+        else if (SDL_strcasecmp(key, "lcd_ghosting") == 0) b->lcd_ghosting = std::atoi(val) != 0;
+    });
     const std::string keybinds_path=(std::filesystem::path(dir)/(keybinds_filename&&keybinds_filename[0]?keybinds_filename:"keybinds.ini")).string();
 #if defined(GBARECOMP_GBA_PAD_BINDS)
     b->input_config_dir=dir;load_controller_bindings(b);
@@ -3119,6 +3176,12 @@ void HostWindow::set_linear_filter(bool enabled) {
     if (enabled && b->sharp_filter) {
         b->sharp_filter = false;
         destroy_sharp_texture(b);
+#if !defined(__ANDROID__)
+        const bool explicit_view = b->expanded_view || b->resize_driven_view || b->integer_scale;
+        SDL_RenderSetLogicalSize(b->renderer, explicit_view ? 0 : b->base_w, explicit_view ? 0 : b->base_h);
+        SDL_RenderSetViewport(b->renderer, nullptr);
+#endif
+        save_launcher_keys(b->launcher_config_path, {{"sharp_filter", "0"}});
     }
     b->linear_filter = enabled;
 #if SDL_VERSION_ATLEAST(2, 0, 12)
@@ -3140,7 +3203,7 @@ void HostWindow::set_integer_scale(bool enabled) {
 #endif
     save_presentation_settings(b->launcher_config_path, b->integer_scale, b->scanlines, b->scanline_strength);
 #if !defined(__ANDROID__)
-    const bool explicit_view = b->expanded_view || b->resize_driven_view || enabled;
+    const bool explicit_view = b->expanded_view || b->resize_driven_view || enabled || b->sharp_filter;
     SDL_RenderSetLogicalSize(b->renderer, explicit_view ? 0 : b->base_w, explicit_view ? 0 : b->base_h);
     SDL_RenderSetViewport(b->renderer, nullptr);
 #endif
@@ -3166,6 +3229,77 @@ int HostWindow::scanline_strength() const {
     return open_ && impl_ ? static_cast<const Backend*>(impl_)->scanline_strength : 35;
 }
 
+void HostWindow::set_sharp_filter(bool enabled) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    if (b->sharp_filter == enabled) return;
+    b->sharp_filter = enabled;
+    if (enabled) b->linear_filter = false;  // sharp replaces plain linear
+    destroy_sharp_texture(b);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    SDL_SetTextureScaleMode(b->texture,
+        b->linear_filter && !b->integer_scale ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+#endif
+#if !defined(__ANDROID__)
+    const bool explicit_view = b->expanded_view || b->resize_driven_view || b->integer_scale || b->sharp_filter;
+    SDL_RenderSetLogicalSize(b->renderer, explicit_view ? 0 : b->base_w, explicit_view ? 0 : b->base_h);
+    SDL_RenderSetViewport(b->renderer, nullptr);
+#endif
+    save_launcher_keys(b->launcher_config_path, {{"sharp_filter", enabled ? "1" : "0"}});
+}
+
+bool HostWindow::sharp_filter() const {
+    return open_ && impl_ && static_cast<const Backend*>(impl_)->sharp_filter;
+}
+
+void HostWindow::set_screen_kind(int kind) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    static const char* const kNames[5] = {"raw", "unlit", "frontlit", "backlit", "classic"};
+    kind = std::clamp(kind, 0, 4);
+    runtime::ColorSettings settings;
+    settings.screen = static_cast<runtime::ScreenKind>(kind);
+    auto upload_order = runtime::UploadPixelOrder::Rgb24;
+    if (b->texture_format == SDL_PIXELFORMAT_ARGB8888) upload_order = runtime::UploadPixelOrder::Argb8888;
+    else if (b->texture_format == SDL_PIXELFORMAT_ABGR8888) upload_order = runtime::UploadPixelOrder::Abgr8888;
+    b->color_lut = std::make_unique<runtime::ColorLut>(settings, upload_order);
+    b->screen_kind = kind;
+    save_launcher_keys(b->launcher_config_path, {{"screen", kNames[kind]}});
+}
+
+int HostWindow::screen_kind() const {
+    return open_ && impl_ ? static_cast<const Backend*>(impl_)->screen_kind : 0;
+}
+
+void HostWindow::set_lcd_grid(bool enabled, int strength_pct) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->lcd_grid = enabled;
+    b->lcd_grid_strength = std::clamp(strength_pct, 0, 100);
+    save_launcher_keys(b->launcher_config_path,
+        {{"lcd_grid", enabled ? "1" : "0"}, {"lcd_grid_strength", std::to_string(b->lcd_grid_strength)}});
+}
+
+bool HostWindow::lcd_grid() const {
+    return open_ && impl_ && static_cast<const Backend*>(impl_)->lcd_grid;
+}
+
+int HostWindow::lcd_grid_strength() const {
+    return open_ && impl_ ? static_cast<const Backend*>(impl_)->lcd_grid_strength : 40;
+}
+
+void HostWindow::set_lcd_ghosting(bool enabled) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->lcd_ghosting = enabled;
+    b->ghost_prev.clear();
+    save_launcher_keys(b->launcher_config_path, {{"lcd_ghosting", enabled ? "1" : "0"}});
+}
+
+bool HostWindow::lcd_ghosting() const {
+    return open_ && impl_ && static_cast<const Backend*>(impl_)->lcd_ghosting;
+}
+
 void HostWindow::set_audio_enabled(bool enabled) {
     if (!open_ || !impl_) return;
     auto* b = static_cast<Backend*>(impl_);
@@ -3183,7 +3317,7 @@ void HostWindow::set_resize_driven_view(bool enabled) {
     auto* b = static_cast<Backend*>(impl_);
     b->resize_driven_view = enabled;
 #if !defined(__ANDROID__)
-    const bool explicit_view = b->expanded_view || enabled || b->integer_scale;
+    const bool explicit_view = b->expanded_view || enabled || b->integer_scale || b->sharp_filter;
     SDL_RenderSetLogicalSize(b->renderer, explicit_view ? 0 : b->base_w, explicit_view ? 0 : b->base_h);
     if (explicit_view) SDL_RenderSetViewport(b->renderer, nullptr);
 #endif

@@ -107,6 +107,25 @@ public:
     void set_scanlines(bool enabled, int strength_pct = 35);
     bool scanlines() const;
     int scanline_strength() const;
+    // Sharp bilinear: nearest-neighbour prescale to the largest integer
+    // multiple, then one linear pass to the window. Crisp pixels with even
+    // widths at non-integer sizes. Mutually exclusive with plain linear.
+    void set_sharp_filter(bool enabled);
+    bool sharp_filter() const;
+    // Present-time screen colour model (colour correction), index order
+    // Raw/Unlit/Frontlit/Backlit/Classic as in color_lut.h. Never touches
+    // the guest framebuffer.
+    void set_screen_kind(int kind);
+    int screen_kind() const;
+    // LCD pixel grid: thin dark gaps between game pixels when each pixel is
+    // at least 3 host pixels tall. Strength 0..100.
+    void set_lcd_grid(bool enabled, int strength_pct = 40);
+    bool lcd_grid() const;
+    int lcd_grid_strength() const;
+    // LCD ghosting: blend each presented frame with the previous one, the
+    // slow response of the original panel. Presentation only.
+    void set_lcd_ghosting(bool enabled);
+    bool lcd_ghosting() const;
     // The player's enhanced-audio (MP2K shadow) choice, remembered in
     // config.ini [Audio] next to [Touch]. saved_audio_enhanced() returns
     // false until the player has chosen.

@@ -265,6 +265,11 @@ struct Args {
 #define GBARECOMP_UI_KEY_AUDIO_ENHANCED  "audio.enhanced"
 #define GBARECOMP_UI_KEY_SCANLINES "graphics.scanlines"
 #define GBARECOMP_UI_KEY_SCANLINE_STRENGTH "graphics.scanline_strength"
+#define GBARECOMP_UI_KEY_SHARP_FILTER "graphics.sharp_filter"
+#define GBARECOMP_UI_KEY_COLOR_CORRECTION "graphics.color_correction"
+#define GBARECOMP_UI_KEY_LCD_GRID "graphics.lcd_grid"
+#define GBARECOMP_UI_KEY_LCD_GRID_STRENGTH "graphics.lcd_grid_strength"
+#define GBARECOMP_UI_KEY_LCD_GHOSTING "graphics.lcd_ghosting"
 
 struct RuntimeUiContext {
     HostWindow* window = nullptr;
@@ -303,6 +308,11 @@ int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_INTEGER_SCALE) == 0) *out = c->window->integer_scale();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SCANLINES) == 0) *out = c->window->scanlines();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SCANLINE_STRENGTH) == 0) *out = c->window->scanline_strength();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SHARP_FILTER) == 0) *out = c->window->sharp_filter();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_COLOR_CORRECTION) == 0) *out = c->window->screen_kind();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID) == 0) *out = c->window->lcd_grid();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID_STRENGTH) == 0) *out = c->window->lcd_grid_strength();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0) *out = c->window->lcd_ghosting();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) *out = c->window->audio_enabled();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0) *out = c->window->volume();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_STATE_SLOT) == 0) *out = c->state_slot;
@@ -345,6 +355,16 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
         c->window->set_scanlines(value != 0, c->window->scanline_strength());
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SCANLINE_STRENGTH) == 0)
         c->window->set_scanlines(c->window->scanlines(), value);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SHARP_FILTER) == 0)
+        c->window->set_sharp_filter(value != 0);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_COLOR_CORRECTION) == 0)
+        c->window->set_screen_kind(value);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID) == 0)
+        c->window->set_lcd_grid(value != 0, c->window->lcd_grid_strength());
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID_STRENGTH) == 0)
+        c->window->set_lcd_grid(c->window->lcd_grid(), value);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0)
+        c->window->set_lcd_ghosting(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0)
         c->window->set_audio_enabled(value != 0);
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_VOLUME) == 0)
@@ -3522,6 +3542,53 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         strength_item.maximum = 100;
         strength_item.step = 5;
         runtime_ui_extras.push_back(strength_item);
+        RecompRuntimeUiItem sharp_item{};
+        sharp_item.key = GBARECOMP_UI_KEY_SHARP_FILTER;
+        sharp_item.section = "Graphics";
+        sharp_item.label = "Sharp bilinear";
+        sharp_item.description = "Crisp pixels with even widths at any window size: integer prescale, then one smooth pass. Best for fullscreen. Replaces the linear filter.";
+        sharp_item.type = RECOMP_RUNTIME_UI_BOOL;
+        runtime_ui_extras.push_back(sharp_item);
+        static const char* const color_choices[] = {
+            "Off (vivid)", "GBA (unlit)", "GBA (frontlit)", "GBA SP (backlit)", "Classic (gamma 4.0)"
+        };
+        static constexpr int color_values[] = {0, 1, 2, 3, 4};
+        RecompRuntimeUiItem color_item{};
+        color_item.key = GBARECOMP_UI_KEY_COLOR_CORRECTION;
+        color_item.section = "Graphics";
+        color_item.label = "Colour correction";
+        color_item.description = "GBA games were drawn oversaturated for a dark, washed-out screen. Pick a screen model to see the colours as intended; Off shows the raw, vivid values.";
+        color_item.type = RECOMP_RUNTIME_UI_CHOICE;
+        color_item.minimum = 0;
+        color_item.maximum = 4;
+        color_item.step = 1;
+        color_item.choices = color_choices;
+        color_item.choice_count = 5;
+        color_item.choice_values = color_values;
+        runtime_ui_extras.push_back(color_item);
+        RecompRuntimeUiItem grid_item{};
+        grid_item.key = GBARECOMP_UI_KEY_LCD_GRID;
+        grid_item.section = "Graphics";
+        grid_item.label = "LCD grid";
+        grid_item.description = "Thin dark gaps between pixels, like the GBA's LCD. Needs the picture at 3x or larger.";
+        grid_item.type = RECOMP_RUNTIME_UI_BOOL;
+        runtime_ui_extras.push_back(grid_item);
+        RecompRuntimeUiItem grid_strength_item{};
+        grid_strength_item.key = GBARECOMP_UI_KEY_LCD_GRID_STRENGTH;
+        grid_strength_item.section = "Graphics";
+        grid_strength_item.label = "LCD grid strength";
+        grid_strength_item.type = RECOMP_RUNTIME_UI_INT;
+        grid_strength_item.minimum = 0;
+        grid_strength_item.maximum = 100;
+        grid_strength_item.step = 5;
+        runtime_ui_extras.push_back(grid_strength_item);
+        RecompRuntimeUiItem ghost_item{};
+        ghost_item.key = GBARECOMP_UI_KEY_LCD_GHOSTING;
+        ghost_item.section = "Graphics";
+        ghost_item.label = "LCD ghosting";
+        ghost_item.description = "Blend each frame with the last, like the original screen's slow response. Softens flicker effects.";
+        ghost_item.type = RECOMP_RUNTIME_UI_BOOL;
+        runtime_ui_extras.push_back(ghost_item);
 #if !defined(__ANDROID__)
         runtime_ui_config.features |=
             RECOMP_RUNTIME_UI_STANDARD_FULLSCREEN |
