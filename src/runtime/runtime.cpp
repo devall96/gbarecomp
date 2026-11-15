@@ -4160,6 +4160,26 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             std::fflush(stdout);
         }
         ev.fast_forward = ev.fast_forward || assist_script_fast;
+#if defined(GBARECOMP_RUNTIME_UI)
+        // GBARECOMP_UI_SHOWCASE=<pumps>: open the in-game menu after that
+        // many host pumps, then move to the next tab every <pumps> (window
+        // captures of every tab, e.g. for checking translations).
+        if (runtime_ui_context.ui) {
+            static const long showcase = [] {
+                const char* e = std::getenv("GBARECOMP_UI_SHOWCASE");
+                return e && e[0] ? std::atol(e) : 0L;
+            }();
+            static uint64_t showcase_pumps = 0;
+            if (showcase > 0) {
+                const uint64_t n = ++showcase_pumps;
+                const uint64_t step = static_cast<uint64_t>(showcase);
+                if (n == step) recomp_runtime_ui_open(runtime_ui_context.ui);
+                else if (n > step && n % step == 0)
+                    recomp_runtime_ui_handle_input(runtime_ui_context.ui,
+                        RECOMP_RUNTIME_UI_INPUT_NEXT_TAB, 1, 0);
+            }
+        }
+#endif
         // Recorded inputs own the guest during diagnostic playback.
         const bool sim_inputs_locked = input_replay_requested || diag.playing() ||
                                        (pump_mid_frame && diag.recording());
