@@ -607,8 +607,13 @@ endif()
 # bundled tcc on a healed function. CMAKE_CURRENT_SOURCE_DIR is the gbarecomp
 # worktree root even
 # when a game project (MinishCapRecomp) pulls us in via add_subdirectory.
+#
+# Release builds published to players can set GBARECOMP_EMBED_SRC_DIR=OFF: the
+# build machine's source path is then not compiled into the executable (the
+# runtime falls back to "."), which is all a player's PC can use anyway.
+option(GBARECOMP_EMBED_SRC_DIR "Compile the source root into the runtime for self-heal recompiles" ON)
 target_compile_definitions(gbarecomp_runtime PRIVATE
-    GBARECOMP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    $<$<BOOL:${GBARECOMP_EMBED_SRC_DIR}>:GBARECOMP_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}">
     GBARECOMP_SELFHEAL_RECOMPILE_DEFAULT=$<BOOL:${GBARECOMP_SELFHEAL_RECOMPILE_DEFAULT}>)
 target_link_libraries(gbarecomp_runtime PUBLIC
     gbarecomp_gba gbarecomp_debug gbarecomp_recompile_core

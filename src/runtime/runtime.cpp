@@ -4179,20 +4179,26 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         }
         ev.fast_forward = ev.fast_forward || assist_script_fast;
 #if defined(GBARECOMP_RUNTIME_UI)
-        // GBARECOMP_UI_SHOWCASE=<pumps>: open the in-game menu after that
-        // many host pumps, then move to the next tab every <pumps> (window
-        // captures of every tab, e.g. for checking translations).
+        // GBARECOMP_UI_SHOWCASE=<open>[,<step>]: open the in-game menu after
+        // <open> host pumps, then move to the next tab every <step> pumps
+        // (default <open>): window captures of every tab, e.g. for checking
+        // translations or taking screenshots.
         if (runtime_ui_context.ui) {
-            static const long showcase = [] {
+            static const std::pair<long, long> showcase = [] {
                 const char* e = std::getenv("GBARECOMP_UI_SHOWCASE");
-                return e && e[0] ? std::atol(e) : 0L;
+                if (!e || !e[0]) return std::pair<long, long>{0, 0};
+                char* rest = nullptr;
+                const long open_at = std::strtol(e, &rest, 10);
+                const long step = rest && *rest == ',' ? std::atol(rest + 1) : open_at;
+                return std::pair<long, long>{open_at, step > 0 ? step : open_at};
             }();
             static uint64_t showcase_pumps = 0;
-            if (showcase > 0) {
+            if (showcase.first > 0) {
                 const uint64_t n = ++showcase_pumps;
-                const uint64_t step = static_cast<uint64_t>(showcase);
-                if (n == step) recomp_runtime_ui_open(runtime_ui_context.ui);
-                else if (n > step && n % step == 0)
+                const uint64_t open_at = static_cast<uint64_t>(showcase.first);
+                const uint64_t step = static_cast<uint64_t>(showcase.second);
+                if (n == open_at) recomp_runtime_ui_open(runtime_ui_context.ui);
+                else if (n > open_at && (n - open_at) % step == 0)
                     recomp_runtime_ui_handle_input(runtime_ui_context.ui,
                         RECOMP_RUNTIME_UI_INPUT_NEXT_TAB, 1, 0);
             }
