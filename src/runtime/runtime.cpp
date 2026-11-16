@@ -271,6 +271,7 @@ struct Args {
 #define GBARECOMP_UI_KEY_LCD_GRID "graphics.lcd_grid"
 #define GBARECOMP_UI_KEY_LCD_GRID_STRENGTH "graphics.lcd_grid_strength"
 #define GBARECOMP_UI_KEY_LCD_GHOSTING "graphics.lcd_ghosting"
+#define GBARECOMP_UI_KEY_SIDE_BARS "graphics.side_bars"
 #define GBARECOMP_UI_KEY_PAUSE_UNFOCUSED "system.pause_unfocused"
 #define GBARECOMP_UI_KEY_FAST_BOOT "system.fast_boot"
 
@@ -316,6 +317,7 @@ int runtime_ui_get(void* opaque, const RecompRuntimeUiItem* item, int* out) {
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID) == 0) *out = c->window->lcd_grid();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GRID_STRENGTH) == 0) *out = c->window->lcd_grid_strength();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0) *out = c->window->lcd_ghosting();
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SIDE_BARS) == 0) *out = c->window->ambient_bars() ? 1 : 0;
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0) *out = c->window->pause_unfocused();
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_BOOT) == 0) *out = c->window->fast_boot();
     else if (std::strcmp(item->key, RECOMP_RUNTIME_UI_KEY_AUDIO) == 0) *out = c->window->audio_enabled();
@@ -370,6 +372,8 @@ int runtime_ui_set(void* opaque, const RecompRuntimeUiItem* item, int value) {
         c->window->set_lcd_grid(c->window->lcd_grid(), value);
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_LCD_GHOSTING) == 0)
         c->window->set_lcd_ghosting(value != 0);
+    else if (std::strcmp(item->key, GBARECOMP_UI_KEY_SIDE_BARS) == 0)
+        c->window->set_ambient_bars(value != 0);
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_PAUSE_UNFOCUSED) == 0)
         c->window->set_pause_unfocused(value != 0);
     else if (std::strcmp(item->key, GBARECOMP_UI_KEY_FAST_BOOT) == 0)
@@ -3438,6 +3442,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 std::filesystem::path p(argv[0]);
                 if (p.has_parent_path()) exe_dir = p.parent_path().string();
             }
+            win.set_ambient_bars_default(opts.ambient_bars_default);
             win.load_input_config(exe_dir.c_str(),
                                   opts.assist_tools_enabled_by_default,
                                   opts.assist_fast_forward_multiplier_default,
@@ -3650,6 +3655,19 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         ghost_item.description = "Blend each frame with the last, like the original screen's slow response. Softens flicker effects.";
         ghost_item.type = RECOMP_RUNTIME_UI_BOOL;
         runtime_ui_extras.push_back(ghost_item);
+        static const char* const side_bar_choices[] = {"Black", "Blurred"};
+        RecompRuntimeUiItem side_bars_item{};
+        side_bars_item.key = GBARECOMP_UI_KEY_SIDE_BARS;
+        side_bars_item.section = "Graphics";
+        side_bars_item.label = "Side bars";
+        side_bars_item.description = "What fills the space around the picture when the window is wider or taller than the game: plain black, or a soft blurred glow of the game itself.";
+        side_bars_item.type = RECOMP_RUNTIME_UI_CHOICE;
+        side_bars_item.minimum = 0;
+        side_bars_item.maximum = 1;
+        side_bars_item.step = 1;
+        side_bars_item.choices = side_bar_choices;
+        side_bars_item.choice_count = 2;
+        runtime_ui_extras.push_back(side_bars_item);
         RecompRuntimeUiItem unfocused_item{};
         unfocused_item.key = GBARECOMP_UI_KEY_PAUSE_UNFOCUSED;
         unfocused_item.section = "System";

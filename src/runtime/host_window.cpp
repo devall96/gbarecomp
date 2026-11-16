@@ -369,6 +369,12 @@ struct Backend {
     unsigned      presentation_source_w = 0, presentation_source_h = 0;
     std::vector<uint8_t> presentation_upload;
     SDL_Texture*  sharp_texture = nullptr;
+    // Ambient side bars: two small linear-filtered render targets that blur
+    // the frame by downsampling (60x40, then 15x10). -1 = no saved choice.
+    SDL_Texture*  ambient_mid = nullptr;
+    SDL_Texture*  ambient_small = nullptr;
+    int           ambient_bars = -1;
+    bool          ambient_bars_default = false;
     int           sharp_texture_w = 0;
     int           sharp_texture_h = 0;
     bool          sharp_target_failed = false;
@@ -553,8 +559,69 @@ struct Backend {
     PresentCadence cadence;
 };
 
+void destroy_ambient_textures(Backend* b) {
+    if (!b) return;
+    if (b->ambient_mid) SDL_DestroyTexture(b->ambient_mid);
+    if (b->ambient_small) SDL_DestroyTexture(b->ambient_small);
+    b->ambient_mid = b->ambient_small = nullptr;
+}
+
+// Draw the blurred, darkened backdrop over the whole drawable; the game picture
+// is drawn on top of it afterwards. Returns false (nothing drawn) when the
+// renderer cannot use render targets.
+bool draw_ambient_bars(Backend* b, SDL_Texture* frame, int drawable_w, int drawable_h) {
+    if (!frame || drawable_w <= 0 || drawable_h <= 0) return false;
+    if (!SDL_RenderTargetSupported(b->renderer)) return false;
+    auto make = [b](SDL_Texture*& t, int w, int h) {
+        if (t) return true;
+        t = SDL_CreateTexture(b->renderer, SDL_PIXELFORMAT_ARGB8888,
+                              SDL_TEXTUREACCESS_TARGET, w, h);
+        if (!t) return false;
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+        SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+#endif
+        return true;
+    };
+    if (!make(b->ambient_mid, 60, 40) || !make(b->ambient_small, 15, 10)) return false;
+    int logical_w = 0, logical_h = 0;
+    SDL_RenderGetLogicalSize(b->renderer, &logical_w, &logical_h);
+    SDL_RenderSetLogicalSize(b->renderer, 0, 0);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    SDL_ScaleMode frame_mode = SDL_ScaleModeNearest;
+    SDL_GetTextureScaleMode(frame, &frame_mode);
+    SDL_SetTextureScaleMode(frame, SDL_ScaleModeLinear);
+#endif
+    bool ok = SDL_SetRenderTarget(b->renderer, b->ambient_mid) == 0 &&
+              SDL_RenderCopy(b->renderer, frame, nullptr, nullptr) == 0 &&
+              SDL_SetRenderTarget(b->renderer, b->ambient_small) == 0 &&
+              SDL_RenderCopy(b->renderer, b->ambient_mid, nullptr, nullptr) == 0;
+    SDL_SetRenderTarget(b->renderer, nullptr);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+    SDL_SetTextureScaleMode(frame, frame_mode);
+#endif
+    SDL_RenderSetViewport(b->renderer, nullptr);
+    if (ok) {
+        // Cover the drawable keeping the picture's aspect, centred.
+        const float sx = static_cast<float>(drawable_w) / 15.0f;
+        const float sy = static_cast<float>(drawable_h) / 10.0f;
+        const float s = std::max(sx, sy) * 1.08f;
+        const int w = static_cast<int>(15.0f * s), h = static_cast<int>(10.0f * s);
+        const SDL_Rect cover{(drawable_w - w) / 2, (drawable_h - h) / 2, w, h};
+        SDL_RenderCopy(b->renderer, b->ambient_small, nullptr, &cover);
+        SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(b->renderer, 0, 0, 0, 150);
+        const SDL_Rect all{0, 0, drawable_w, drawable_h};
+        SDL_RenderFillRect(b->renderer, &all);
+        SDL_SetRenderDrawBlendMode(b->renderer, SDL_BLENDMODE_NONE);
+    }
+    if (logical_w > 0 && logical_h > 0)
+        SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
+    return ok;
+}
+
 void destroy_sharp_texture(Backend* b) {
     if (!b) return;
+    destroy_ambient_textures(b);
     if (b->sharp_texture) SDL_DestroyTexture(b->sharp_texture);
     b->sharp_texture = nullptr;
     b->sharp_texture_w = 0;
@@ -3022,6 +3089,8 @@ void HostWindow::present(const uint8_t* rgb888, unsigned sampled_w, unsigned sam
         std::fflush(stderr);
     }
     if (touch_input_enabled(b)) publish_touch_presentation(b);
+    if (ambient_bars() && (layout.width < drawable_w || layout.height < drawable_h))
+        draw_ambient_bars(b, frame_texture, drawable_w, drawable_h);
 #if defined(__ANDROID__)
     const SDL_Rect destination{layout.x, layout.y, layout.width, layout.height};
     SDL_RenderCopy(b->renderer, frame_texture, nullptr, &destination);
@@ -3155,6 +3224,7 @@ void HostWindow::load_input_config(const char* dir,
         else if (SDL_strcasecmp(key, "lcd_grid_strength") == 0)
             b->lcd_grid_strength = std::clamp(std::atoi(val), 0, 100);
         else if (SDL_strcasecmp(key, "lcd_ghosting") == 0) b->lcd_ghosting = std::atoi(val) != 0;
+        else if (SDL_strcasecmp(key, "ambient_bars") == 0) b->ambient_bars = std::atoi(val) != 0 ? 1 : 0;
         else if (SDL_strcasecmp(key, "pause_unfocused") == 0) b->pause_unfocused = std::atoi(val) != 0;
         else if (SDL_strcasecmp(key, "fast_boot") == 0) b->fast_boot = std::atoi(val) != 0;
     });
@@ -3411,6 +3481,24 @@ bool HostWindow::lcd_grid() const {
 
 int HostWindow::lcd_grid_strength() const {
     return open_ && impl_ ? static_cast<const Backend*>(impl_)->lcd_grid_strength : 40;
+}
+
+void HostWindow::set_ambient_bars(bool enabled) {
+    if (!open_ || !impl_) return;
+    auto* b = static_cast<Backend*>(impl_);
+    b->ambient_bars = enabled ? 1 : 0;
+    save_launcher_keys(b->launcher_config_path, {{"ambient_bars", enabled ? "1" : "0"}});
+}
+
+bool HostWindow::ambient_bars() const {
+    if (!open_ || !impl_) return false;
+    const auto* b = static_cast<const Backend*>(impl_);
+    return b->ambient_bars < 0 ? b->ambient_bars_default : b->ambient_bars != 0;
+}
+
+void HostWindow::set_ambient_bars_default(bool enabled) {
+    if (!open_ || !impl_) return;
+    static_cast<Backend*>(impl_)->ambient_bars_default = enabled;
 }
 
 void HostWindow::set_lcd_ghosting(bool enabled) {
@@ -4252,6 +4340,9 @@ void HostWindow::set_lcd_grid(bool, int) {}
 bool HostWindow::lcd_grid() const { return false; }
 int HostWindow::lcd_grid_strength() const { return 0; }
 void HostWindow::set_lcd_ghosting(bool) {}
+void HostWindow::set_ambient_bars(bool) {}
+bool HostWindow::ambient_bars() const { return false; }
+void HostWindow::set_ambient_bars_default(bool) {}
 bool HostWindow::lcd_ghosting() const { return false; }
 void HostWindow::set_pause_unfocused(bool) {}
 bool HostWindow::pause_unfocused() const { return false; }

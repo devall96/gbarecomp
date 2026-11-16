@@ -167,6 +167,10 @@ struct RunOptions {
     // "Fast boot" choice (System, default on) applied at the next launch.
     // Scripted runs (--frames, input replay, headless) keep the exact boot.
     std::uint32_t fast_boot_frames = 0;
+    // Side bars around a letterboxed picture: false = flat colour (engine
+    // default), true = a blurred, darkened copy of the game. The player's
+    // choice (Graphics > Side bars) is remembered and wins.
+    bool ambient_bars_default = false;
     bool assist_tools_enabled_by_default = true;
     // Always-on diagnostic replay capture for interactive windowed sessions
     // (docs/DIAGNOSTIC_REPLAY.md). Players opt out with GBARECOMP_DIAGNOSTICS=0

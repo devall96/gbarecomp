@@ -131,6 +131,12 @@ public:
     // slow response of the original panel. Presentation only.
     void set_lcd_ghosting(bool enabled);
     bool lcd_ghosting() const;
+    // Side bars: fill the space around a letterboxed picture with a blurred,
+    // darkened copy of it instead of a flat colour. Presentation only. The
+    // game picks the default; the player's choice is remembered.
+    void set_ambient_bars(bool enabled);
+    bool ambient_bars() const;
+    void set_ambient_bars_default(bool enabled);
     // Pause the game while the window does not have focus (default on).
     void set_pause_unfocused(bool enabled);
     bool pause_unfocused() const;
