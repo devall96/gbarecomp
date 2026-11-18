@@ -3578,6 +3578,21 @@ void HostWindow::set_resize_driven_view(bool enabled) {
 void HostWindow::set_runtime_ui(RecompRuntimeUi* ui) {
     if (!open_ || !impl_) return;
     static_cast<Backend*>(impl_)->runtime_ui = ui;
+#if defined(RECOMP_RUNTIME_UI_HAS_INPUT_FAMILY)
+    // GBARECOMP_UI_FAMILY_DEFAULT=xbox|playstation|nintendo|keyboard: the
+    // prompt style before the player's first input (a launcher that knows the
+    // controller, such as RecompLauncher's {pad}, passes it). The first key or
+    // button press still switches as usual.
+    if (const char* v = std::getenv("GBARECOMP_UI_FAMILY_DEFAULT"); ui && v && v[0]) {
+        RecompRuntimeUiInputFamily family = RECOMP_RUNTIME_UI_FAMILY_XBOX;
+        if (SDL_strncasecmp(v, "key", 3) == 0) family = RECOMP_RUNTIME_UI_FAMILY_KEYBOARD;
+        else if (SDL_strncasecmp(v, "play", 4) == 0 || SDL_strncasecmp(v, "ps", 2) == 0)
+            family = RECOMP_RUNTIME_UI_FAMILY_PLAYSTATION;
+        else if (SDL_strncasecmp(v, "nin", 3) == 0 || SDL_strncasecmp(v, "switch", 6) == 0)
+            family = RECOMP_RUNTIME_UI_FAMILY_NINTENDO;
+        recomp_runtime_ui_set_input_family(ui, family);
+    }
+#endif
 }
 #endif
 

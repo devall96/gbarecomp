@@ -1463,6 +1463,42 @@ bool inflate_deflate(const uint8_t* data, size_t size, size_t expected,
     return out.size() == expected;
 }
 
+// Decodes one file entry (stored or deflated) and checks its CRC32.
+bool read_zip_entry(const std::vector<uint8_t>& bytes, const ZipEntry& entry,
+                    std::vector<uint8_t>& out, std::string* error) {
+    out.clear();
+    if ((uint64_t)entry.local_offset + 30 > bytes.size() ||
+        le32(bytes.data() + entry.local_offset) != 0x04034b50u) {
+        set_error(error, "ZIP local entry is invalid");
+        return false;
+    }
+    const uint16_t name_len = le16(bytes.data() + entry.local_offset + 26);
+    const uint16_t extra_len = le16(bytes.data() + entry.local_offset + 28);
+    const uint64_t data_at =
+        (uint64_t)entry.local_offset + 30 + name_len + extra_len;
+    if (data_at + entry.compressed_size > bytes.size()) {
+        set_error(error, "ZIP entry payload is invalid");
+        return false;
+    }
+    const uint8_t* compressed = bytes.data() + data_at;
+    if (entry.method == 0) {
+        if (entry.compressed_size != entry.size) {
+            set_error(error, "stored ZIP entry has inconsistent size");
+            return false;
+        }
+        out.assign(compressed, compressed + entry.size);
+    } else if (!inflate_deflate(compressed, entry.compressed_size,
+                                entry.size, out)) {
+        set_error(error, "cannot inflate ZIP entry: " + entry.name);
+        return false;
+    }
+    if (gba::crc32(out.data(), entry.size) != entry.crc) {
+        set_error(error, "ZIP entry checksum failed: " + entry.name);
+        return false;
+    }
+    return true;
+}
+
 bool extract_zip(const std::vector<uint8_t>& bytes,
                  const std::vector<ZipEntry>& entries,
                  const fs::path& target, std::string* error) {
@@ -1483,41 +1519,9 @@ bool extract_zip(const std::vector<uint8_t>& bytes,
             }
             continue;
         }
-        if ((uint64_t)entry.local_offset + 30 > bytes.size() ||
-            le32(bytes.data() + entry.local_offset) != 0x04034b50u) {
-            set_error(error, "ZIP local entry is invalid");
-            return false;
-        }
-        const uint16_t name_len =
-            le16(bytes.data() + entry.local_offset + 26);
-        const uint16_t extra_len =
-            le16(bytes.data() + entry.local_offset + 28);
-        const uint64_t data_at =
-            (uint64_t)entry.local_offset + 30 + name_len + extra_len;
-        if (data_at + entry.compressed_size > bytes.size()) {
-            set_error(error, "ZIP entry payload is invalid");
-            return false;
-        }
-        const uint8_t* compressed = bytes.data() + data_at;
         std::vector<uint8_t> expanded;
-        const uint8_t* data = compressed;
-        if (entry.method == 0) {
-            if (entry.compressed_size != entry.size) {
-                set_error(error, "stored ZIP entry has inconsistent size");
-                return false;
-            }
-        } else {
-            if (!inflate_deflate(compressed, entry.compressed_size,
-                                 entry.size, expanded)) {
-                set_error(error, "cannot inflate ZIP entry: " + entry.name);
-                return false;
-            }
-            data = expanded.data();
-        }
-        if (gba::crc32(data, entry.size) != entry.crc) {
-            set_error(error, "ZIP entry checksum failed: " + entry.name);
-            return false;
-        }
+        if (!read_zip_entry(bytes, entry, expanded, error)) return false;
+        const uint8_t* data = expanded.data();
         fs::create_directories(output.parent_path(), ec);
         if (ec) {
             set_error(error, "cannot create archive parent directory: " +
@@ -1994,6 +1998,30 @@ RecompLauncherCModProvider provider = {
 #endif
 
 }  // namespace
+
+bool mod_runtime_zip_read_file(const std::vector<uint8_t>& zip,
+                               const std::string& extension,
+                               std::vector<uint8_t>& out, std::string* name,
+                               std::string* error) {
+    std::vector<ZipEntry> entries;
+    if (!parse_zip(zip, entries, error)) return false;
+    auto ends_with_ci = [](const std::string& text, const std::string& tail) {
+        if (tail.size() > text.size()) return false;
+        for (size_t i = 0; i < tail.size(); ++i)
+            if (std::tolower((unsigned char)text[text.size() - tail.size() + i]) !=
+                std::tolower((unsigned char)tail[i]))
+                return false;
+        return true;
+    };
+    for (const ZipEntry& entry : entries) {
+        if (entry.directory || !ends_with_ci(entry.name, extension)) continue;
+        if (!read_zip_entry(zip, entry, out, error)) return false;
+        if (name) *name = entry.name;
+        return true;
+    }
+    set_error(error, "no " + extension + " file in the ZIP archive");
+    return false;
+}
 
 bool mod_runtime_initialize(const fs::path& root,
                             const std::string& game_id,

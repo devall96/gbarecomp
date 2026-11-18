@@ -16,6 +16,14 @@ struct RecompLauncherCModProvider;
 
 namespace gbarecomp {
 
+// Reads the first file whose name ends with `extension` (".gba",
+// case-insensitive) from a ZIP archive in memory: stored or deflated, CRC32
+// checked. Used for players' zipped ROMs.
+bool mod_runtime_zip_read_file(const std::vector<uint8_t>& zip,
+                               const std::string& extension,
+                               std::vector<uint8_t>& out, std::string* name,
+                               std::string* error);
+
 // Load the package catalog rooted at <exe>/mods for one verified game.
 bool mod_runtime_initialize(const std::filesystem::path& root,
                             const std::string& game_id,
