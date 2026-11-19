@@ -515,7 +515,19 @@ set(GBARECOMP_GENERATED_BIOS_DIR
 # functions live in src/runtime/generated_bios/bios_recompiled.cpp.
 # We can't list it unconditionally because the placeholder build
 # doesn't have it. Pull it in if present.
-if(EXISTS "${GBARECOMP_GENERATED_BIOS_DIR}/bios_recompiled.cpp")
+# Game modules (docs/GAME_MODULES.md): the executable carries no code made
+# from a ROM or BIOS. The player's copies are recompiled and compiled into
+# modules on their machine, and src/runtime/game_module.cpp loads them.
+option(GBARECOMP_GAME_MODULE
+    "Leave recompiled cart and BIOS code out of the executable; load game modules instead" OFF)
+target_sources(gbarecomp_runtime PRIVATE src/runtime/game_module.cpp)
+if(GBARECOMP_GAME_MODULE)
+    set_property(SOURCE src/runtime/game_module.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS GBARECOMP_GAME_MODULE=1)
+    target_compile_definitions(gbarecomp_runtime PUBLIC GBARECOMP_GAME_MODULE=1)
+endif()
+
+if(EXISTS "${GBARECOMP_GENERATED_BIOS_DIR}/bios_recompiled.cpp" AND NOT GBARECOMP_GAME_MODULE)
     target_sources(gbarecomp_runtime PRIVATE
         "${GBARECOMP_GENERATED_BIOS_DIR}/bios_dispatch_table.cpp"
         "${GBARECOMP_GENERATED_BIOS_DIR}/bios_recompiled.cpp")

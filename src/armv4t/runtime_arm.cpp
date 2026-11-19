@@ -37,21 +37,48 @@
 #include "native_program.h"
 extern "C" const DispatchEntry kDispatchTable[];
 extern "C" const unsigned kDispatchTableLen;
-namespace {
-const RuntimeNativeProgram* g_selected_native_program = nullptr;
-const DispatchEntry* cart_dispatch() {
-    return g_selected_native_program ? g_selected_native_program->dispatch : kDispatchTable;
-}
-unsigned cart_dispatch_count() {
-    return g_selected_native_program ? g_selected_native_program->dispatch_count : kDispatchTableLen;
-}
-}
-
 // BIOS dispatch table. Lives in src/runtime/generated_bios/
 // bios_dispatch_table.cpp — placeholder until `gba_recompile --bios`
 // is run. runtime_dispatch consults this FIRST for PC < 0x4000.
 extern "C" const DispatchEntry kBiosDispatchTable[];
 extern "C" const unsigned kBiosDispatchTableLen;
+
+namespace {
+const RuntimeNativeProgram* g_selected_native_program = nullptr;
+// Tables from loaded game modules (src/runtime/game_module.cpp) replace the
+// ones linked into the executable, which a module build leaves empty.
+const DispatchEntry* g_module_cart_dispatch = nullptr;
+unsigned g_module_cart_dispatch_count = 0;
+const DispatchEntry* g_module_bios_dispatch = nullptr;
+unsigned g_module_bios_dispatch_count = 0;
+const DispatchEntry* cart_dispatch() {
+    if (g_selected_native_program) return g_selected_native_program->dispatch;
+    return g_module_cart_dispatch ? g_module_cart_dispatch : kDispatchTable;
+}
+unsigned cart_dispatch_count() {
+    if (g_selected_native_program) return g_selected_native_program->dispatch_count;
+    return g_module_cart_dispatch ? g_module_cart_dispatch_count : kDispatchTableLen;
+}
+const DispatchEntry* bios_dispatch() {
+    return g_module_bios_dispatch ? g_module_bios_dispatch : kBiosDispatchTable;
+}
+unsigned bios_dispatch_count() {
+    return g_module_bios_dispatch ? g_module_bios_dispatch_count : kBiosDispatchTableLen;
+}
+}
+
+extern "C" void runtime_install_module_dispatch(int bios, const DispatchEntry* table,
+                                                unsigned count) {
+    if (bios) {
+        g_module_bios_dispatch = table;
+        g_module_bios_dispatch_count = count;
+    } else {
+        g_module_cart_dispatch = table;
+        g_module_cart_dispatch_count = count;
+    }
+}
+
+extern "C" uint32_t runtime_native_ram_base_value(void) { return g_runtime_native_ram_base; }
 
 // Stage-2 self-heal third dispatch tier. Defined in the runtime lib
 // (src/runtime/overlay_loader.cpp); test binaries that link only
@@ -1066,7 +1093,7 @@ const DispatchEntry* dispatch_resolve(uint32_t target_pc) {
         // the old bytes and must not silently execute after a code rewrite.
     } else if (pc < kBiosRegionEnd) {
         entry = lookup_in(
-            kBiosDispatchTable, kBiosDispatchTableLen, pc, thumb);
+            bios_dispatch(), bios_dispatch_count(), pc, thumb);
     } else {
         entry = lookup_in(cart_dispatch(), cart_dispatch_count(), pc, thumb);
     }
@@ -1163,7 +1190,7 @@ extern "C" int runtime_has_static_entry(uint32_t pc, int thumb) {
     if (lookup_native_ram(a, thumb != 0, &base)) return 1;
     if (guarded_code_address(a,thumb != 0)) return 0;
     const DispatchEntry* entry = (a < kBiosRegionEnd)
-        ? lookup_in(kBiosDispatchTable, kBiosDispatchTableLen, a, thumb != 0)
+        ? lookup_in(bios_dispatch(), bios_dispatch_count(), a, thumb != 0)
         : lookup_in(cart_dispatch(), cart_dispatch_count(), a, thumb != 0);
     return entry != nullptr ? 1 : 0;
 }

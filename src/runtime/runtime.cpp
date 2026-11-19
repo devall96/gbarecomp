@@ -20,6 +20,7 @@
 // step_once() becomes a real `runtime_dispatch` driver.
 
 #include "runtime.h"
+#include "game_module.h"
 #include "suspend_guard.h"
 #include "multiplayer_launch.h"
 #include "view_config.h"
@@ -1681,6 +1682,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                      header.error.c_str());
         return 1;
     }
+    if (opts.prepare_native_code) {
+        const std::string bios_sha1 = lower_ascii(bios.sha1_hex());
+        if (const int code = opts.prepare_native_code(args.rom.c_str(), rom_sha1.c_str(),
+                args.bios.c_str(), bios_sha1.c_str(), opts.prepare_native_code_user))
+            return code;
+    }
 
     if (netplay) {
         try {
@@ -1808,8 +1815,14 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         args.bios_hle_keep_intro = (e[0] && e[0] != '0');
     if (const char* e = std::getenv("GBARECOMP_BIOS_SKIP_INTRO"))
         args.bios_skip_intro = (e[0] && e[0] != '0') ? 1 : 0;
-#if !defined(GBARECOMP_HAVE_BIOS_RECOMP)
-    if (!args.bios_hle) {
+    // The recompiled BIOS is linked in, or comes from a game module the game
+    // loaded in prepare_native_code (docs/GAME_MODULES.md).
+#if defined(GBARECOMP_HAVE_BIOS_RECOMP)
+    const bool bios_recomp_present = true;
+#else
+    const bool bios_recomp_present = game_module_loaded(GameModuleKind::Bios);
+#endif
+    if (!bios_recomp_present && !args.bios_hle) {
         args.bios_hle = true;
         if (!args.quiet) {
             std::fprintf(stderr,
@@ -1817,7 +1830,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 "using BIOS HLE boot instead\n");
         }
     }
-    if (args.bios_hle_keep_intro) {
+    if (!bios_recomp_present && args.bios_hle_keep_intro) {
         args.bios_hle_keep_intro = false;
         if (!args.quiet) {
             std::fprintf(stderr,
@@ -1825,7 +1838,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 "cannot keep the BIOS intro in HLE mode\n");
         }
     }
-#endif
     gba::bios_hle_set_mode(args.bios_hle ? gba::BiosHleMode::On
                                          : gba::BiosHleMode::Off);
     if (!args.quiet)

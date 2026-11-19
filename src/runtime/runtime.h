@@ -397,6 +397,15 @@ struct RunOptions {
     // gba::ExternalDirectSource). It drives the in-game Enhanced audio
     // toggle; null keeps the hardware mix (and MP2K's shadow when present).
     gba::ExternalDirectSource* audio_direct_source = nullptr;
+    // Game modules (docs/GAME_MODULES.md): called once the ROM and BIOS are
+    // resolved and verified, before anything runs, with their paths and
+    // lower-case SHA-1s. The game loads (building first, if needed) its
+    // modules through load_game_module() and returns 0, or returns the exit
+    // code to end with. Null for a build that links its generated code.
+    int (*prepare_native_code)(const char* rom_path, const char* rom_sha1,
+                               const char* bios_path, const char* bios_sha1,
+                               void* user) = nullptr;
+    void* prepare_native_code_user = nullptr;
 };
 
 // Read only the same config/region overlays and CLI save override as boot.
